@@ -9,8 +9,11 @@ media keys; the Magic Remote pointer also works.
 
 ## Requirements
 
-- **webOS 6.0 (2021 models) or newer.** webOS 22 or newer is recommended; webOS 6 lacks
-  CSS flexbox `gap`, so some spacing will be tighter.
+- **webOS 6.0 (2021 models) or newer.** webOS 22 or newer is recommended. webOS 6
+  (Chromium 79) lacks CSS flexbox `gap` (Chromium 84), which the app uses for most of
+  its spacing, so on webOS 6 many screens are visibly cramped: icons touch their labels,
+  stacked text and fields have no space between them, and cards and the hero's buttons
+  sit against each other. Everything still works; it just looks unfinished there.
 - **A server password on your Seanime server.** A packaged webOS app runs from
   `file://`, so the browser marks its requests `Origin: null`. Without a password the
   server rejects them to protect against requests from websites. With a password set,
@@ -83,23 +86,28 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
     not decode and how to turn transcoding on.
   - The transcode is H.264 + AAC over HLS, played through hls.js so that every playlist
     and segment request carries the server password (the TV's own HLS player can't add
-    it). Leaving the player stops the server's transcode.
+    it). Leaving the player stops the server's transcode. On a TV known not to be 4K, the
+    transcode's renditions taller than 1080p are left out, so it never switches to one.
   - Audio the browser says it can't play (e.g. DTS, TrueHD, sometimes Opus or FLAC) only
     gives a warning: the TV's file player often plays what its MSE check refuses.
   - Torrent, debrid and online streams play as they are; the server can't transcode
-    them. When the TV can't decode one, the error says so.
+    them. When the TV can't decode one, the error says so. When the server answers with
+    an HTTP error instead (an expired link, a missing file), the error gives the status.
 - **Playback stats** (Info key) show the mode (`html5 · direct play`, or
   `html5+hls.js · transcode`), the file's codecs, why it is transcoded, and the TV model.
 - **Chapters** of library files come from the server, so the seek bar shows them (and the
   chapter name while seeking) as on Android TV.
 - **Background.** Pressing Home or switching inputs pauses playback where it is. If the TV
   released the video decoder meanwhile, the episode is loaded again at that position when
-  the app comes back, with the same audio and subtitle tracks. It comes back paused with
-  the controls up; resuming on its own is deliberately not done.
+  the app comes back, with the same audio and subtitle tracks (including one added from a
+  subtitle search) and speed. It comes back paused with the controls up, also when the
+  episode was still loading as the app was hidden; resuming on its own is deliberately
+  not done.
 - **Resuming** ("continue watching") hands the start position to the TV's media pipeline
   with LG's `mediaOption` parameter, so it doesn't buffer from the start of the file first.
   If the TV rejects it, or the file hasn't loaded after 8 seconds, Tenji loads the file the
-  usual way and seeks, and skips `mediaOption` for the rest of the session. *Not verified on
+  usual way and seeks; if the file then plays, `mediaOption` is skipped for the rest of the
+  session (a file the TV can't play at all doesn't count against it). *Not verified on
   a TV*: desktop Chromium plays the `<source>` but ignores the option, so the checks covered
   passing the position, the seek that follows and the fallback, not the speed-up.
 - **Audio tracks** can be switched when the TV exposes them, which webOS does.
@@ -198,5 +206,9 @@ webOS setup (see `metro.config.js`):
   `src/lib/webos/playback-capabilities.ts` and the TV's facts from `device-info.ts` and
   `luna.ts`.
 - `webos/build.mjs` builds the app. It makes every URL relative so the app works from
-  `file://`, and lowers JS/CSS to Chromium 79. It also adds polyfills and writes the
-  `.ipk`.
+  `file://`, and lowers JS/CSS to Chromium 79: Tailwind's cascade layers, `@property`,
+  `translate`/`scale`/`rotate` and logical shorthands such as `padding-inline` are
+  rewritten. Flexbox `gap` and `aspect-ratio` can't be, so webOS 6 ignores them.
+  CSS that react-native-web makes at runtime never passes through the build;
+  `src/lib/webos/ordered-css-stylesheet.ts` rewrites what old engines drop there
+  (`overflow: clip`). It also adds polyfills and writes the `.ipk`.
