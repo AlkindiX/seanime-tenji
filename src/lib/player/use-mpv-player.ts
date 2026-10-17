@@ -137,8 +137,7 @@ export function useMpvPlayer() {
         }
         // Web player only; native plans never set these.
         if (playbackPlan.preferMse) videoSource.preferMse = true
-        // The kind is known here; the web player would otherwise guess it from the URL.
-        if (playbackPlan.url ? playbackPlan.isHls : source.streamKind === "hls") videoSource.isHls = true
+        if (playbackPlan.isHls) videoSource.isHls = true
         if (playbackPlan.maxVideoHeight) videoSource.maxVideoHeight = playbackPlan.maxVideoHeight
         if (playbackPlan.chapters?.length) videoSource.chapters = playbackPlan.chapters
         if (playbackPlan.mediaInfoSummary) videoSource.mediaInfoSummary = playbackPlan.mediaInfoSummary

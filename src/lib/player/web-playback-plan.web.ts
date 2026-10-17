@@ -216,6 +216,7 @@ export function useWebPlaybackPlan(source: MobilePlaybackSource | null): WebPlay
     const [fallback, setFallback] = React.useState<{ id: string; position?: number } | null>(null)
     const { data: watchHistory } = useGetContinuityWatchHistory()
     const library = isLibraryFile(source)
+    const streamIsHls = source?.streamKind === "hls"
     const forceTranscode = !!source && fallback?.id === source.id
     const key = source ? `${source.id}:${forceTranscode ? "transcode" : "auto"}` : ""
     // The effect runs per source id: the source object can be replaced during
@@ -275,8 +276,11 @@ export function useWebPlaybackPlan(source: MobilePlaybackSource | null): WebPlay
 
     return React.useMemo(() => {
         if (!source) return undefined
-        if (!library) return { externalSubtitles: NO_SUBTITLES, onPlaybackError }
+        if (!library) {
+            // The player would otherwise guess from the URL, and online HLS links may lack ".m3u8".
+            return { externalSubtitles: NO_SUBTITLES, isHls: streamIsHls, onPlaybackError }
+        }
         if (!current) return undefined
         return { ...current.plan, onPlaybackError }
-    }, [current, library, onPlaybackError, source])
+    }, [current, library, onPlaybackError, source, streamIsHls])
 }
