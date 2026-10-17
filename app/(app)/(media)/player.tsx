@@ -61,7 +61,7 @@ import { MpvPlayerView, type TechnicalInfo } from "expo-mpv-player"
 import { NavigationBar } from "expo-navigation-bar"
 import { useRouter } from "expo-router"
 import { useAtom, useAtomValue } from "jotai/react"
-import { SkipForward } from "lucide-react-native"
+import SkipForward from "lucide-react-native/icons/skip-forward"
 import React from "react"
 import {
     ActivityIndicator,

@@ -5,17 +5,15 @@ import { useTVFocus } from "@/components/tv/tv-focus"
 import { tvSize } from "@/components/tv/tv-scale"
 import type { PlayerChapter, PlayerState } from "@/lib/player"
 import type { MobilePlaybackSource } from "@/lib/player/types"
-import {
-    Captions,
-    List,
-    Pause,
-    Play,
-    RotateCcw,
-    RotateCw,
-    Settings,
-    SkipForward,
-    X,
-} from "lucide-react-native"
+import Captions from "lucide-react-native/icons/captions"
+import List from "lucide-react-native/icons/list"
+import Pause from "lucide-react-native/icons/pause"
+import Play from "lucide-react-native/icons/play"
+import RotateCcw from "lucide-react-native/icons/rotate-ccw"
+import RotateCw from "lucide-react-native/icons/rotate-cw"
+import Settings from "lucide-react-native/icons/settings"
+import SkipForward from "lucide-react-native/icons/skip-forward"
+import X from "lucide-react-native/icons/x"
 import * as React from "react"
 import {
     Animated,
