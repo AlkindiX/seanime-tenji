@@ -762,9 +762,18 @@ function PlayerScreenInner() {
         if (canGoBack()) back()
     }, [back, canGoBack, player, saveReturnFocus, stopTVTorrent])
 
+    // The error and loading screens replace the player and its dialogs.
+    const showsBareScreen = !!error || (!!loadingMessage && !source)
+
     useTVEventHandler((event) => {
         if (!Platform.isTV || !event) return
         if (event.eventType === "menu") return
+
+        if (showsBareScreen) {
+            // No exit prompt to confirm there: Stop leaves like Back.
+            if (event.eventType === "stop" && tvKeyAction(event) === 1) handleBack()
+            return
+        }
 
         if (event.eventType === "playPause") {
             player.togglePlayPause()
@@ -846,6 +855,10 @@ function PlayerScreenInner() {
         if (!Platform.isTV) return
 
         const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+            if (showsBareScreen) {
+                handleBack()
+                return true
+            }
             if (showExitPrompt) {
                 setShowExitPrompt(false)
                 return true
@@ -882,6 +895,7 @@ function PlayerScreenInner() {
         nextEpisodePrompt,
         panel,
         showExitPrompt,
+        showsBareScreen,
     ])
 
     const closePlayerToEntry = React.useCallback((view: MobilePlaybackSource["entryView"], mediaId: number) => {

@@ -276,10 +276,19 @@ function onMouseDown() {
     notifyPointerActivity(true)
 }
 
-/** With the Magic Remote pointer, focus follows the cursor so TV highlights still show. */
+const HOVER_FOCUSABLE = "[tabindex]:not([tabindex=\"-1\"]),input,textarea,button,a[href]"
+
+/**
+ * With the Magic Remote pointer, focus follows the cursor so TV highlights
+ * still show. A text field is never focused by hovering it, as focus opens
+ * the TV's keyboard: the hover goes to the control around it (the TV inputs
+ * wrap their field in one that starts editing on click), and a click
+ * focuses the field itself.
+ */
 function onPointerOver(event: MouseEvent) {
     if (!pointerMode || !(event.target instanceof Element)) return
-    const target = event.target.closest<HTMLElement>("[tabindex]:not([tabindex=\"-1\"]),input,textarea,button,a[href]")
+    let target = event.target.closest<HTMLElement>(HOVER_FOCUSABLE)
+    while (target && isTextField(target)) target = target.parentElement?.closest<HTMLElement>(HOVER_FOCUSABLE) ?? null
     if (target && target !== document.activeElement && !isTextField(document.activeElement)) {
         focusElement(target, { reveal: false })
     }
