@@ -18,12 +18,17 @@ const Pressable = React.forwardRef<View, TVPressableProps>(function Pressable({
     ...props
 }, forwardedRef) {
     const ref = usePreferredFocusRef(forwardedRef, hasTVPreferredFocus)
+    const selectable = isTVSelectable !== false && focusable !== false
 
     return (
         <BasePressable
             {...props}
             ref={ref}
-            focusable={isTVSelectable === false ? false : focusable}
+            focusable={selectable ? focusable : false}
+            // react-native-web's Pressable sets tabIndex 0 itself, which outranks
+            // `focusable`; without this, D-pad focus and audio guidance would stop
+            // on presses meant for the pointer only (drawer backdrops).
+            {...(selectable ? null : { tabIndex: -1 })}
             dataSet={preferredDataSet(dataSet, hasTVPreferredFocus)}
         />
     )

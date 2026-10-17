@@ -48,6 +48,18 @@ ways:
 
 `dist/webos/app` is the unpacked app if you'd rather package it with `ares-package`.
 
+The launcher shows the app on a `#1c154a` tile (`iconColor`) with a short description, and
+the TV shows `splash.png` while the app loads. The build checks that every image named in
+`appinfo.json` exists and has the size LG asks for (icon 80×80, large icon 130×130, splash
+1920×1080).
+
+**Audio Guidance.** `appinfo.json` turns on `supportsAudioGuidance`, so the TV's
+Audio Guidance (Settings › Accessibility) reads the focused button, card or tab from its
+ARIA label. React Native Web turns `accessibilityLabel` and `accessibilityRole` into those,
+so give every new focusable an `accessibilityLabel`, especially icon-only ones. Text drawn
+with an icon font would otherwise be read as part of the name. The labels have been checked
+in desktop Chromium, not yet with the TV's speech.
+
 ## Playback
 
 The built-in player is the TV's HTML5 video engine, not libmpv.

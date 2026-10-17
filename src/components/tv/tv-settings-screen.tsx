@@ -83,6 +83,9 @@ const SettingsRow = React.memo(React.forwardRef<RowRef, SettingsRowProps>(functi
             disabled={disabled}
             onFocus={focusState.focus}
             onBlur={focusState.blur}
+            accessibilityRole="button"
+            accessibilityLabel={detail ? `${label}, ${detail}` : label}
+            accessibilityState={{ disabled: Boolean(disabled) }}
             style={{ opacity: disabled ? 0.4 : 1 }}
         >
             <Animated.View

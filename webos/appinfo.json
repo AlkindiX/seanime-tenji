@@ -5,11 +5,17 @@
     "type": "web",
     "main": "index.html",
     "title": "Seanime Tenji",
+    "appDescription": "Seanime for your TV",
     "icon": "icon.png",
     "largeIcon": "largeIcon.png",
+    "iconColor": "#1c154a",
+    "splashBackground": "splash.png",
     "bgColor": "#070707",
     "resolution": "1920x1080",
     "disableBackHistoryAPI": true,
+    "accessibility": {
+        "supportsAudioGuidance": true
+    },
     "requiredACG": [],
     "uiRevision": 2
 }

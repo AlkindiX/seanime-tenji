@@ -5,9 +5,9 @@
  *   dist/webos/app/                         the packaged web app (appinfo.json + files)
  *   dist/webos/app.seanime.tenji_<v>_all.ipk  installable package (ares-install, Homebrew Channel, Dev Manager)
  *
- * Steps: export the TV interface for web with Expo, make every URL relative
- * (webOS loads the app from file://), lower JS and CSS for older TV browsers,
- * add polyfills, then write the IPK.
+ * Steps: check the appinfo.json images, export the TV interface for web with
+ * Expo, make every URL relative (webOS loads the app from file://), lower JS
+ * and CSS for older TV browsers, add polyfills, then write the IPK.
  *
  * Flags: --skip-export  reuse dist/webos/www from a previous run
  */
@@ -206,6 +206,44 @@ async function buildPolyfills(file) {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
+// appinfo.json images
+///////////////////////////////////////////////////////////////////////////////
+
+/** Image fields of appinfo.json and the size LG's appinfo.json reference asks for. */
+const APPINFO_IMAGES = {
+    icon: [80, 80],
+    largeIcon: [130, 130],
+    splashBackground: [1920, 1080],
+}
+
+/** Width and height from a PNG's IHDR chunk, or null when the file isn't a PNG. */
+function pngSize(file) {
+    const header = Buffer.alloc(24)
+    const fd = fs.openSync(file, "r")
+    try {
+        fs.readSync(fd, header, 0, 24, 0)
+    } finally {
+        fs.closeSync(fd)
+    }
+    const signature = "89504e470d0a1a0a"
+    if (header.subarray(0, 8).toString("hex") !== signature || header.toString("ascii", 12, 16) !== "IHDR") return null
+    return [header.readUInt32BE(16), header.readUInt32BE(20)]
+}
+
+function checkPng(file, field, [width, height]) {
+    if (!fs.existsSync(file)) {
+        throw new Error(`appinfo.json ${field}: ${path.relative(root, file)} is missing`)
+    }
+    const size = pngSize(file)
+    if (!size) {
+        throw new Error(`appinfo.json ${field}: ${path.relative(root, file)} is not a PNG`)
+    }
+    if (size[0] !== width || size[1] !== height) {
+        throw new Error(`appinfo.json ${field}: ${path.relative(root, file)} is ${size[0]}x${size[1]}, webOS expects ${width}x${height}`)
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // IPK
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -337,6 +375,11 @@ function writeIpk(appinfo) {
 
 async function main() {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"))
+    const appinfo = JSON.parse(fs.readFileSync(path.join(webosDir, "appinfo.json"), "utf8"))
+    appinfo.version = pkg.version
+    // Checked first so a bad image fails the build before the slow export.
+    const images = Object.entries(APPINFO_IMAGES).filter(([field]) => appinfo[field])
+    for (const [field, size] of images) checkPng(path.join(webosDir, appinfo[field]), field, size)
 
     if (!args.has("--skip-export")) exportWeb()
     if (!fs.existsSync(path.join(exportDir, "index.html"))) {
@@ -355,11 +398,9 @@ async function main() {
     }
     await buildPolyfills(path.join(appDir, "polyfills.js"))
 
-    const appinfo = JSON.parse(fs.readFileSync(path.join(webosDir, "appinfo.json"), "utf8"))
-    appinfo.version = pkg.version
     fs.writeFileSync(path.join(appDir, "appinfo.json"), JSON.stringify(appinfo, null, 4) + "\n")
-    for (const icon of [appinfo.icon, appinfo.largeIcon]) {
-        fs.copyFileSync(path.join(webosDir, icon), path.join(appDir, icon))
+    for (const [field] of images) {
+        fs.copyFileSync(path.join(webosDir, appinfo[field]), path.join(appDir, appinfo[field]))
     }
 
     const ipkPath = writeIpk(appinfo)

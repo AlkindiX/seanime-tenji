@@ -11,6 +11,8 @@ import {
     focusElement,
     focusInitial,
     getFocusedElement,
+    getFocusRoot,
+    isFocusable,
     moveFocus,
     nearestScroller,
     pageFocus,
@@ -322,6 +324,16 @@ function onWheel(event: WheelEvent) {
 }
 
 /**
+ * True when focus sits somewhere the D-pad can't reach or highlight: nowhere
+ * (<body>), or on an element react-native-web's modal focus trap picked
+ * because `focus()` works on it (a backdrop or a zero-height sentinel).
+ */
+function focusIsLost() {
+    const focused = getFocusedElement()
+    return !focused || (!isTextField(focused) && !isFocusable(focused, getFocusRoot()))
+}
+
+/**
  * Native TV focus never disappears; in a browser it falls back to <body>
  * when the focused element unmounts. Put it back on something visible.
  */
@@ -330,7 +342,7 @@ function watchLostFocus() {
     const check = () => {
         pending = null
         if (pointerMode || document.hidden) return
-        if (!getFocusedElement()) focusInitial()
+        if (focusIsLost()) focusInitial()
     }
     const schedule = () => {
         if (pending === null) pending = setTimeout(check, 250)
@@ -340,8 +352,11 @@ function watchLostFocus() {
         pending = setTimeout(check, 0)
     }
     document.addEventListener("focusout", schedule, true)
+    document.addEventListener("focusin", () => {
+        if (!pointerMode && focusIsLost()) checkFocusSoon()
+    }, true)
     setInterval(() => {
-        if (!getFocusedElement()) schedule()
+        if (focusIsLost()) schedule()
     }, 600)
 }
 

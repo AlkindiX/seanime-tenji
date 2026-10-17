@@ -135,6 +135,8 @@ export const TVButton = React.forwardRef<React.ElementRef<typeof Pressable>, TVB
                 }}
                 className={cn("rounded-xl", disabled && "opacity-40", className)}
                 accessibilityRole="button"
+                // Named explicitly so screen readers skip the icon font's glyph.
+                accessibilityLabel={props.accessibilityLabel ?? (detail ? `${label}, ${detail}` : label)}
                 accessibilityState={{ disabled: Boolean(disabled) }}
                 style={{ flexShrink: 0 }}
             >
@@ -236,6 +238,7 @@ export const TVPillButton = React.forwardRef<React.ElementRef<typeof Pressable>,
                 }}
                 className={cn("rounded-full", disabled && "opacity-40", className)}
                 accessibilityRole="button"
+                accessibilityLabel={props.accessibilityLabel ?? label}
                 accessibilityState={{ disabled: Boolean(disabled), selected: active }}
                 style={{ flexShrink: 0 }}
             >

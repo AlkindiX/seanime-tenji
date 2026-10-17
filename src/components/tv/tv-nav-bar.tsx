@@ -58,6 +58,7 @@ function NavItem({
             onFocus={focusState.focus}
             onBlur={focusState.blur}
             accessibilityRole="tab"
+            accessibilityLabel={item.label}
             accessibilityState={{ selected: active }}
             style={{ flexShrink: 0 }}
         >
