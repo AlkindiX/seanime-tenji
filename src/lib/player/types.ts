@@ -129,6 +129,10 @@ export type WebPlaybackPlan = {
     /** Replaces the resume position, e.g. after switching to transcoding mid-episode. */
     startPosition?: number
     preferMse?: boolean
+    /** `url` is HLS (the server's transcode). */
+    isHls?: boolean
+    /** Leave out HLS renditions taller than this (a Full HD TV can't decode 4K). */
+    maxVideoHeight?: number
     chapters?: MpvChapter[]
     mediaInfoSummary?: MpvMediaInfoSummary
     /**

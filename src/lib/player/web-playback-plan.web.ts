@@ -27,6 +27,10 @@ const SUBS_ENDPOINT = "/api/v1/mediastream/subs"
 const TIMEOUT_MS = 8000
 /** MediaError codes for "can't decode" and "format not supported". */
 const DECODE_ERRORS = new Set([3, 4])
+/** MEDIA_ERR_NETWORK: the web player also reports HTTP failures of the source with it. */
+const NETWORK_ERROR = 2
+/** Taller than this is beyond a Full HD TV's decoder (1088: coded height of 1080p). */
+const FULL_HD_HEIGHT = 1088
 const NO_SUBTITLES: MpvExternalSubtitle[] = []
 
 /** What the plan was built from, kept for explaining a later error. */
@@ -129,6 +133,7 @@ async function resolveLibraryPlan(source: MobilePlaybackSource, forceTranscode: 
             device: describeDevice(device) ?? undefined,
         },
     }
+    if (device.uhd === false) plan.maxVideoHeight = FULL_HD_HEIGHT
 
     if ((decision.mode === "transcode" || forceTranscode) && transcodeAvailable) {
         const transcode = await requestStream(serverUrl, path, "transcode").catch((error) => {
@@ -139,6 +144,7 @@ async function resolveLibraryPlan(source: MobilePlaybackSource, forceTranscode: 
             plan.url = `${serverUrl}${transcode.streamUrl}`
             plan.headers = getServerAuthHeaders()
             plan.preferMse = true
+            plan.isHls = true
             const summary = plan.mediaInfoSummary!
             summary.mode = "transcode"
             // The server's transcode is always H.264.
@@ -254,7 +260,10 @@ export function useWebPlaybackPlan(source: MobilePlaybackSource | null): WebPlay
     const current = library ? (resolved?.key === key ? resolved : null) : null
 
     const onPlaybackError = React.useCallback<NonNullable<WebPlaybackPlan["onPlaybackError"]>>((error) => {
-        if (!source || !DECODE_ERRORS.has(error.code ?? 0)) return null
+        if (!source) return null
+        // A server or network failure, not the format: transcoding wouldn't help.
+        if (error.code === NETWORK_ERROR) return error.message
+        if (!DECODE_ERRORS.has(error.code ?? 0)) return null
         if (current && current.library && current.transcodeAvailable
             && current.plan.mediaInfoSummary?.mode !== "transcode" && fallback?.id !== source.id) {
             log.info("Direct play failed to decode; switching to the server's transcode", { sourceId: source.id, position: error.position })

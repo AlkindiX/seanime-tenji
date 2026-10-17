@@ -38,6 +38,10 @@ export type MpvVideoSource = {
      * carries `headers` (the TV's own HLS player sends none).
      */
     preferMse?: boolean
+    /** The source is HLS whatever its URL looks like (the web player guesses from ".m3u8" otherwise). */
+    isHls?: boolean
+    /** HLS renditions taller than this are dropped, e.g. 4K levels on a Full HD TV. */
+    maxVideoHeight?: number
     /** Chapters known from elsewhere; mpv reads them from the file. */
     chapters?: MpvChapter[]
     /** How the source was chosen, shown with the technical info. */

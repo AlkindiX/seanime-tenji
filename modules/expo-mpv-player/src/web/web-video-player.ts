@@ -17,7 +17,7 @@ import type {
     SubtitleTrack,
     TechnicalInfo,
 } from "../MpvPlayer.types"
-import { mediaOptionType, shouldReload } from "./media-pipeline"
+import { levelsAboveHeight, loadFailure, mediaOptionType, shouldReload, type SourceProbe } from "./media-pipeline"
 import { activeCues, parseSubtitles, stripMarkup, type SubtitleCue } from "./subtitles"
 
 export type WebVideoPlayerCallbacks = {
@@ -39,6 +39,8 @@ type SubtitleEntry = {
     url?: string
     cues?: SubtitleCue[]
     loading?: Promise<void>
+    /** Added with addSubtitleFile, so a reload of the same source keeps it. */
+    added?: boolean
 }
 
 type BrowserAudioTrack = { enabled: boolean; label: string; language: string }
@@ -73,6 +75,52 @@ const MEDIA_OPTION_TIMEOUT_MS = 8000
 /** Set once a TV rejected mediaOption, so later loads go straight to `src`. */
 let mediaOptionFailed = false
 
+/** How many times hls.js may rebuild the media pipeline after a decode error, per load. */
+const HLS_MEDIA_RECOVERIES = 2
+
+/** How long the check of a source that failed to load may take. */
+const PROBE_TIMEOUT_MS = 5000
+
+function isHidden() {
+    return typeof document !== "undefined" && document.hidden
+}
+
+function abortAfter(ms: number) {
+    const controller = typeof AbortController === "undefined" ? null : new AbortController()
+    const timer = setTimeout(() => controller?.abort(), ms)
+    return {
+        signal: controller?.signal,
+        done: () => {
+            clearTimeout(timer)
+            // Stops the body download; only the status was wanted.
+            controller?.abort()
+        },
+    }
+}
+
+/**
+ * Asks for the source again to tell a server or network failure from a file
+ * the TV can't play: a <video> reports both as MEDIA_ERR_SRC_NOT_SUPPORTED.
+ */
+async function probeSource(url: string, headers: Array<[string, string]>): Promise<SourceProbe> {
+    const request = abortAfter(PROBE_TIMEOUT_MS)
+    try {
+        const response = await fetch(url, { headers, cache: "no-store", signal: request.signal })
+        return { status: response.status }
+    } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return "unknown"
+        // CORS can hide the answer of a host that is up; a no-cors request only fails when it is not.
+        try {
+            await fetch(url, { mode: "no-cors", cache: "no-store", signal: request.signal })
+            return "unknown"
+        } catch (retryError) {
+            return retryError instanceof DOMException && retryError.name === "AbortError" ? "unknown" : "unreachable"
+        }
+    } finally {
+        request.done()
+    }
+}
+
 function onWebOS() {
     if (typeof window === "undefined") return false
     const w = window as { webOSSystem?: unknown; PalmSystem?: unknown }
@@ -81,6 +129,10 @@ function onWebOS() {
 
 /** Where to pick up after the app went to the background. */
 type Suspended = { position: number; subtitle: number; audio: number }
+
+function isHlsSource(source: MpvVideoSource) {
+    return source.isHls ?? isHlsUrl(source.url)
+}
 
 export class WebVideoPlayer {
     private hls: Hls | null = null
@@ -98,6 +150,11 @@ export class WebVideoPlayer {
     private restoreTracks: Omit<Suspended, "position"> | null = null
     private mediaOptionSource: HTMLSourceElement | null = null
     private mediaOptionTimer: ReturnType<typeof setTimeout> | null = null
+    /** The file is being loaded again without mediaOption; set if that works. */
+    private mediaOptionRetry = false
+    private hlsRecoveries = 0
+    /** Bumped on every load, so late answers about an older source are dropped. */
+    private loadId = 0
     private readonly onVisibilityChange = () => this.handleVisibilityChange()
 
     constructor(
@@ -144,8 +201,16 @@ export class WebVideoPlayer {
         on("durationchange", () => this.emitProgress())
         on("error", () => {
             const error = video.error
-            if (!error || !this.source) return
-            this.callbacks.onError({ error: error.message || MEDIA_ERRORS[error.code] || "Playback failed", code: error.code })
+            const source = this.source
+            if (!error || !source) return
+            // MSE decode errors reach the element, not hls.js's ERROR event.
+            if (this.hls && error.code === 3 && this.recoverHlsMediaError()) return
+            const message = error.message || MEDIA_ERRORS[error.code] || "Playback failed"
+            if (error.code === 4 && !this.hls) {
+                void this.reportLoadFailure(source, message)
+                return
+            }
+            this.callbacks.onError({ error: message, code: error.code })
         })
 
         video.textTracks.addEventListener?.("addtrack", () => this.callbacks.onTracksReady())
@@ -170,13 +235,14 @@ export class WebVideoPlayer {
 
         const { video } = this
         video.autoplay = false
-        const headers = Object.entries(source.headers ?? {}).filter(([name]) => !FORBIDDEN_HEADERS.test(name))
+        this.loadId++
+        const headers = this.requestHeaders(source)
         // The TV's own HLS player can't add headers to playlist and segment
         // requests, and a file:// app has to authenticate every request to
         // the Seanime server, so its streams ask for hls.js (`preferMse`).
         // Other streams keep the native player: hls.js requests are subject
         // to CORS, which third-party hosts may not allow.
-        const useHlsJs = isHlsUrl(source.url) && Hls.isSupported()
+        const useHlsJs = isHlsSource(source) && Hls.isSupported()
             && (source.preferMse || !video.canPlayType("application/vnd.apple.mpegurl"))
 
         if (useHlsJs) {
@@ -188,7 +254,15 @@ export class WebVideoPlayer {
             })
             hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => this.callbacks.onTracksReady())
             hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => this.callbacks.onTracksReady())
-            let recoveries = 0
+            const maxHeight = source.maxVideoHeight
+            if (maxHeight) {
+                // The server's transcode lists the original (maybe 4K) first;
+                // a Full HD TV can't decode those, so ABR must not pick them.
+                hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    const drop = levelsAboveHeight(hls.levels.map(level => level.height), maxHeight)
+                    for (const index of drop) hls.removeLevel(index)
+                })
+            }
             hls.on(Hls.Events.ERROR, (_event, data) => {
                 if (!data.fatal) return
                 if (data.type !== Hls.ErrorTypes.MEDIA_ERROR) {
@@ -197,10 +271,7 @@ export class WebVideoPlayer {
                 }
                 // A decoder hiccup is worth a retry or two; codecs the browser
                 // doesn't have are not, and would otherwise retry forever.
-                if (data.details !== Hls.ErrorDetails.MANIFEST_INCOMPATIBLE_CODECS_ERROR && recoveries++ < 2) {
-                    hls.recoverMediaError()
-                    return
-                }
+                if (data.details !== Hls.ErrorDetails.MANIFEST_INCOMPATIBLE_CODECS_ERROR && this.recoverHlsMediaError()) return
                 this.callbacks.onError({ error: `${MEDIA_ERRORS[3]} (${data.details})`, code: 3 })
             })
             hls.loadSource(source.url)
@@ -216,6 +287,26 @@ export class WebVideoPlayer {
 
     unload() {
         this.reset()
+    }
+
+    private requestHeaders(source: MpvVideoSource): Array<[string, string]> {
+        return Object.entries(source.headers ?? {}).filter(([name]) => !FORBIDDEN_HEADERS.test(name))
+    }
+
+    private recoverHlsMediaError() {
+        if (!this.hls || this.hlsRecoveries >= HLS_MEDIA_RECOVERIES) return false
+        this.hlsRecoveries++
+        console.warn("[web-video-player] media error; rebuilding the HLS pipeline", this.hlsRecoveries)
+        this.hls.recoverMediaError()
+        return true
+    }
+
+    /** A source that didn't load: say so when it was the server or network, not the format. */
+    private async reportLoadFailure(source: MpvVideoSource, message: string) {
+        const loadId = this.loadId
+        const probe = await probeSource(source.url, this.requestHeaders(source))
+        if (loadId !== this.loadId || !this.source) return
+        this.callbacks.onError(loadFailure(probe) ?? { error: message, code: 4 })
     }
 
     destroy() {
@@ -235,6 +326,8 @@ export class WebVideoPlayer {
         this.lastCueKey = ""
         this.suspended = null
         this.restoreTracks = null
+        this.mediaOptionRetry = false
+        this.hlsRecoveries = 0
         this.clearMediaOption()
         this.callbacks.onSubtitleCues([])
         this.video.pause()
@@ -249,6 +342,11 @@ export class WebVideoPlayer {
 
         const usedMediaOption = !!this.mediaOptionSource
         this.clearMediaOptionTimer()
+        if (this.mediaOptionRetry) {
+            // The file plays without mediaOption, so it was mediaOption the TV refused.
+            this.mediaOptionRetry = false
+            mediaOptionFailed = true
+        }
         const start = source.startPosition ?? 0
         // With mediaOption the TV already started there; desktop browsers ignore it.
         const alreadyThere = usedMediaOption && Math.abs(this.video.currentTime - start) <= 2
@@ -256,10 +354,13 @@ export class WebVideoPlayer {
             this.video.currentTime = start
         }
         this.callbacks.onLoad({ url: source.url })
+        // The rate carries over loads (defaultPlaybackRate) with no ratechange to say so.
+        this.state({ speed: this.video.playbackRate })
         this.emitProgress()
         this.callbacks.onTracksReady()
 
-        if (source.autoplay !== false) {
+        // A load that finishes while the app is hidden stays paused.
+        if (source.autoplay !== false && !isHidden()) {
             void this.play()
         } else {
             this.state({ isPaused: true })
@@ -271,7 +372,7 @@ export class WebVideoPlayer {
     ///////////////////////////////////////////////////////////////////////////
 
     private canUseMediaOption(source: MpvVideoSource) {
-        return !mediaOptionFailed && onWebOS() && !isHlsUrl(source.url)
+        return !mediaOptionFailed && onWebOS() && !isHlsSource(source)
             && (source.startPosition ?? 0) > 0 && this.video.canPlayType("video/mp4") !== ""
     }
 
@@ -294,7 +395,9 @@ export class WebVideoPlayer {
     private fallBackFromMediaOption(element: HTMLSourceElement) {
         if (this.mediaOptionSource !== element || !this.source) return
         console.warn("[web-video-player] mediaOption was not accepted; loading the file without it")
-        mediaOptionFailed = true
+        // Only remembered once the file loads without it: a file the TV
+        // can't play fails the same way and says nothing about mediaOption.
+        this.mediaOptionRetry = true
         this.clearMediaOption()
         this.video.src = this.source.url
         this.video.load()
@@ -328,8 +431,11 @@ export class WebVideoPlayer {
         const { video } = this
 
         if (document.hidden) {
+            // A load still in flight comes up paused (and so does a fallback reload).
+            this.source = { ...this.source, autoplay: false }
             this.suspended = {
-                position: video.currentTime,
+                // Before loadedmetadata, currentTime is 0, not where the source starts.
+                position: video.readyState >= 1 ? video.currentTime : (this.source.startPosition ?? 0),
                 subtitle: this.selectedSubtitle,
                 audio: this.getCurrentAudioTrack(),
             }
@@ -343,7 +449,10 @@ export class WebVideoPlayer {
         if (!suspended || !shouldReload(video.readyState, video.networkState, !!video.error)) return
 
         const source = this.source
+        const added = this.subtitles.filter(entry => entry.added)
         this.load({ ...source, startPosition: suspended.position, autoplay: false })
+        // Files added with addSubtitleFile come after the source's own, as before.
+        for (const entry of added) this.subtitles.push({ url: entry.url, title: entry.title, cues: entry.cues, added: true })
         this.restoreTracks = { subtitle: suspended.subtitle, audio: suspended.audio }
     }
 
@@ -386,6 +495,9 @@ export class WebVideoPlayer {
     }
 
     setSpeed(speed: number) {
+        // load() resets playbackRate to defaultPlaybackRate without a ratechange,
+        // so a reload after the background would drop back to 1x unseen.
+        this.video.defaultPlaybackRate = speed
         this.video.playbackRate = speed
     }
 
@@ -527,7 +639,7 @@ export class WebVideoPlayer {
     }
 
     async addSubtitleFile(url: string, select: boolean) {
-        const entry: SubtitleEntry = { url, title: fileTitle(url) }
+        const entry: SubtitleEntry = { url, title: fileTitle(url), added: true }
         this.subtitles.push(entry)
         await this.loadSidecar(entry)
         if (select) this.setSubtitleTrack(this.subtitles.indexOf(entry) + 1)
