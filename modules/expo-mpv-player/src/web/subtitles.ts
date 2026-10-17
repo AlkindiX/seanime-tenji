@@ -10,7 +10,7 @@ export type SubtitleCue = {
     start: number
     end: number
     text: string
-    /** ASS \an7-\an9: the line belongs at the top of the screen. */
+    /** The line belongs at the top of the screen (ASS \an7-9 or a top-aligned style). */
     top?: boolean
 }
 
@@ -23,20 +23,50 @@ function parseTimestamp(value: string): number {
     return Number.isFinite(seconds) ? seconds : 0
 }
 
-function stripMarkup(text: string) {
-    return text
-        .replace(/<[^>]+>/g, "")
-        .replace(/\{[^}]*\}/g, "")
-        .replace(/&amp;/g, "&")
-        .replace(/&lt;/g, "<")
-        .replace(/&gt;/g, ">")
-        .replace(/&nbsp;/g, " ")
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", nbsp: " ", quot: "\"", apos: "'", lrm: "\u200e", rlm: "\u200f" }
+
+/** Decodes the HTML entities WebVTT allows (and SRT files carry), each once. */
+function decodeEntities(text: string) {
+    return text.replace(/&(#x[\da-f]+|#\d+|[a-z]+);/gi, (whole, name: string) => {
+        if (name[0] === "#") {
+            const code = name[1] === "x" || name[1] === "X" ? Number.parseInt(name.slice(2), 16) : Number.parseInt(name.slice(1), 10)
+            return Number.isFinite(code) && code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole
+        }
+        return ENTITIES[name.toLowerCase()] ?? whole
+    })
+}
+
+/**
+ * Removes SRT/WebVTT tags (<i>, <font …>, <c.x>, <v Name>, <00:01.000>…)
+ * and ASS override blocks, then decodes entities. Other "<" and ">" are
+ * text ("x < y and y > z").
+ */
+export function stripMarkup(text: string) {
+    return decodeEntities(text
+        .replace(/<\/?(?:b|i|u|s|font|c|v|lang|ruby|rt|span)(?=[\s.>])[^>]*>/gi, "")
+        .replace(/<\d[\d:.]*>/g, "")
+        .replace(/\{[^}]*\}/g, ""))
         .trim()
+}
+
+/** ASS \an7-9 (numpad), or legacy SSA \a5-7: the line goes at the top of the screen. */
+function overrideIsTop(raw: string): boolean | undefined {
+    const an = /\\an([1-9])/.exec(raw)
+    if (an) return Number(an[1]) >= 7
+    const legacy = /\\a(\d{1,2})(?!\d)/.exec(raw)
+    if (legacy) return legacyAlignmentIsTop(Number(legacy[1]))
+    return undefined
+}
+
+/** SSA v4 alignment: 1-3 bottom, 5-7 top, 9-11 middle. */
+function legacyAlignmentIsTop(value: number) {
+    return value >= 5 && value <= 7
 }
 
 function parseSrtOrVtt(content: string): SubtitleCue[] {
     const cues: SubtitleCue[] = []
-    const blocks = content.replace(/\r/g, "").split(/\n{2,}/)
+    // A separator line may hold stray spaces or tabs.
+    const blocks = content.replace(/\r/g, "").split(/\n(?:[ \t]*\n)+/)
 
     for (const block of blocks) {
         const lines = block.split("\n")
@@ -44,15 +74,19 @@ function parseSrtOrVtt(content: string): SubtitleCue[] {
         if (timingIndex < 0) continue
 
         const [startRaw, endRaw] = lines[timingIndex].split("-->")
-        const text = stripMarkup(lines.slice(timingIndex + 1).join("\n"))
+        const raw = lines.slice(timingIndex + 1).join("\n")
+        const text = stripMarkup(raw)
         if (!text) continue
 
-        cues.push({
+        const cue: SubtitleCue = {
             start: parseTimestamp(startRaw),
             // VTT cue settings follow the end time ("00:01.000 line:0")
             end: parseTimestamp(endRaw.trim().split(/\s+/)[0]),
             text,
-        })
+        }
+        // SRT files converted from ASS keep {\an8} for lines meant for the top.
+        if (overrideIsTop(raw)) cue.top = true
+        cues.push(cue)
     }
 
     return cues.sort((a, b) => a.start - b.start)
@@ -60,22 +94,43 @@ function parseSrtOrVtt(content: string): SubtitleCue[] {
 
 function parseAss(content: string): SubtitleCue[] {
     const cues: SubtitleCue[] = []
-    let inEvents = false
+    let section = ""
     let format: string[] = []
+    let styleFormat: string[] = []
+    /** Style name -> whether its Alignment puts lines at the top. */
+    const topStyles = new Map<string, boolean>()
+    // SSA v4 ([V4 Styles]) numbers alignments differently from ASS ([V4+ Styles]).
+    let legacyAlignment = false
 
     for (const rawLine of content.replace(/\r/g, "").split("\n")) {
         const line = rawLine.trim()
         if (line.startsWith("[")) {
-            inEvents = line.toLowerCase() === "[events]"
+            section = line.toLowerCase()
+            legacyAlignment = section === "[v4 styles]"
             continue
         }
-        if (!inEvents) continue
+        const lower = line.toLowerCase()
 
-        if (line.toLowerCase().startsWith("format:")) {
+        if (section === "[v4+ styles]" || section === "[v4 styles]") {
+            if (lower.startsWith("format:")) {
+                styleFormat = line.slice(7).split(",").map(field => field.trim().toLowerCase())
+            } else if (lower.startsWith("style:") && styleFormat.length > 0) {
+                const values = line.slice(6).split(",").map(value => value.trim())
+                const name = values[styleFormat.indexOf("name")]
+                const alignment = Number(values[styleFormat.indexOf("alignment")])
+                if (name !== undefined && Number.isFinite(alignment)) {
+                    topStyles.set(name, legacyAlignment ? legacyAlignmentIsTop(alignment) : alignment >= 7)
+                }
+            }
+            continue
+        }
+        if (section !== "[events]") continue
+
+        if (lower.startsWith("format:")) {
             format = line.slice(7).split(",").map(field => field.trim().toLowerCase())
             continue
         }
-        if (!line.toLowerCase().startsWith("dialogue:") || format.length === 0) continue
+        if (!lower.startsWith("dialogue:") || format.length === 0) continue
 
         // Text is the last field and may itself contain commas.
         const values = line.slice(9).split(",")
@@ -97,7 +152,8 @@ function parseAss(content: string): SubtitleCue[] {
             start: parseTimestamp(field("start")),
             end: parseTimestamp(field("end")),
             text,
-            top: /\\an[789]/.test(raw),
+            // An override in the line wins over its style's alignment.
+            top: overrideIsTop(raw) ?? topStyles.get(field("style").replace(/^\*/, "")) ?? false,
         })
     }
 

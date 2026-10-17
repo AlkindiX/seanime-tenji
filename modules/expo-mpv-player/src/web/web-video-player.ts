@@ -18,7 +18,7 @@ import type {
     TechnicalInfo,
 } from "../MpvPlayer.types"
 import { mediaOptionType, shouldReload } from "./media-pipeline"
-import { activeCues, parseSubtitles, type SubtitleCue } from "./subtitles"
+import { activeCues, parseSubtitles, stripMarkup, type SubtitleCue } from "./subtitles"
 
 export type WebVideoPlayerCallbacks = {
     onLoad: (payload: { url: string }) => void
@@ -575,7 +575,9 @@ export class WebVideoPlayer {
         for (let i = 0; i < list.length; i++) {
             const cue = list[i] as TextTrackCue & { text?: string }
             if (cue.startTime <= time && cue.endTime > time && cue.text) {
-                cues.push({ start: cue.startTime, end: cue.endTime, text: cue.text.replace(/<[^>]+>/g, "") })
+                // WebVTT cue text keeps its tags and entities ("Tom &amp; Jerry").
+                const text = stripMarkup(cue.text)
+                if (text) cues.push({ start: cue.startTime, end: cue.endTime, text })
             }
         }
         return cues
