@@ -1,4 +1,5 @@
 import { BUFFER_FILL } from "@/components/features/player/constants"
+import { requestTVFocus, tvKeyAction } from "@/components/tv/tv-native"
 import { formatTime, isSkippableChapter } from "@/components/features/player/helpers"
 import { useTVFocus } from "@/components/tv/tv-focus"
 import { tvSize } from "@/components/tv/tv-scale"
@@ -231,7 +232,7 @@ export function TVPlayerControls({
 
     useTVEventHandler((event) => {
         if (!visible || !barFocused || !event) return
-        if (event.eventKeyAction === 0) return
+        if (tvKeyAction(event) === 0) return
 
         if (event.eventType === "left") {
             onSeekRelative(-seekSec)
@@ -267,7 +268,7 @@ export function TVPlayerControls({
 
             // This is the reliable focus API on react-native-tvos. Retry while
             // the native focus tree settles after the player panel closes.
-            target?.requestTVFocus()
+            requestTVFocus(target)
             tries++
             if (target && tries >= 5) returnRef.current = null
             if (tries < 5 && (visible || focusWhenHidden)) {

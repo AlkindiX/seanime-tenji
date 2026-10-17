@@ -5,7 +5,7 @@ import { ChevronLeft, List, Pause, Play, Settings, SkipForward, Unlock } from "l
 import React from "react"
 import { Platform, Pressable as RNPressable, Text, View, type ViewStyle } from "react-native"
 import { GestureDetector, Pressable as GHPressable } from "react-native-gesture-handler"
-import type { ComposedGesture, GestureType } from "react-native-gesture-handler"
+import type { GestureType, LegacyComposedGesture } from "react-native-gesture-handler"
 import Animated, { type AnimatedStyle, FadeIn, FadeOut, type SharedValue, useAnimatedStyle, withTiming } from "react-native-reanimated"
 import { BUFFER_FILL } from "./constants"
 import { formatTime, isSkippableChapter } from "./helpers"
@@ -121,7 +121,7 @@ interface ControlsOverlayProps {
     insets: { top: number; bottom: number; left: number; right: number }
     zoomMode: "fit" | "fill"
     panel: PlayerPanel | null
-    seekBarGesture: GestureType | ComposedGesture
+    seekBarGesture: GestureType | LegacyComposedGesture
     onSeekBarLayout: (e: { nativeEvent: { layout: { width: number } } }) => void
     seekBarTrackStyle: AnimatedStyle<ViewStyle>
     seekBarFillStyle: AnimatedStyle<ViewStyle>

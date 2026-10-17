@@ -9,7 +9,8 @@ const TextClassContext = React.createContext<string | undefined>(undefined)
 const Text = React.forwardRef<TextRef, SlottableTextProps>(
     ({ className, asChild = false, ...props }, ref) => {
         const textClass = React.useContext(TextClassContext)
-        const Component = asChild ? Slot.Text : RNText
+        // Slot.Text forwards to a Text, so both take the same ref.
+        const Component = (asChild ? Slot.Text : RNText) as typeof RNText
         return (
             <Component
                 className={cn("text-base text-foreground web:select-text", textClass, className)}

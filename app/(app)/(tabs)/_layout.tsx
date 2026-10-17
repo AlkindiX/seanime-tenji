@@ -5,6 +5,10 @@ import { Tabs } from "expo-router"
 import * as React from "react"
 import { Platform, View } from "react-native"
 
+export const unstable_settings = {
+    initialRouteName: "(library)",
+}
+
 export default function TabLayout() {
 
     const user = useCurrentUser()
@@ -53,7 +57,6 @@ export default function TabLayout() {
             <View className="flex-1 bg-background">
                 <View className="flex-1">
                     <Tabs
-                        initialRouteName="(library)"
                         detachInactiveScreens
                         screenOptions={{
                             headerShown: false,
@@ -81,7 +84,6 @@ export default function TabLayout() {
 
     return (
         <Tabs
-            initialRouteName="(library)"
             screenOptions={{ headerShown: false, freezeOnBlur: true }}
             tabBar={props => <TabBar user={user} tabs={tabs} {...props} />}
         >
