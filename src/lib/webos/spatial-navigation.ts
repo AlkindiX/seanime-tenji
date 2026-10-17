@@ -68,6 +68,15 @@ function insideUnfocusableGuide(el: HTMLElement, root: Element) {
     return false
 }
 
+/**
+ * Navigators keep inactive screens mounted under the active one (inactive tabs
+ * stay laid out at z-index -1) and mark them `aria-hidden`. The arrow keys must
+ * not walk into them, though an explicit focus request still may.
+ */
+function inHiddenScreen(el: Element) {
+    return el.closest("[aria-hidden=\"true\"]") !== null
+}
+
 export function isFocusable(el: unknown, root: Element = document.body): el is HTMLElement {
     if (!isElement(el) || !el.matches(FOCUSABLE_SELECTOR)) return false
     if (el.getAttribute("aria-disabled") === "true") return false
@@ -244,7 +253,7 @@ function readingOrder(a: HTMLElement, b: HTMLElement) {
 /** Focuses something sensible when nothing (or something outside the active modal) has focus. */
 export function focusInitial() {
     const root = getFocusRoot()
-    const all = focusablesIn(root, root)
+    const all = focusablesIn(root, root).filter(el => !inHiddenScreen(el))
     if (all.length === 0) return false
 
     const preferred = all.filter(el => el.hasAttribute(PREFERRED_ATTRIBUTE))
@@ -282,12 +291,13 @@ export function moveFocus(direction: Direction): boolean {
         }
     }
 
-    const candidates: HTMLElement[] = focusablesIn(scope, root).filter(el => el !== current && !current.contains(el))
+    const candidates: HTMLElement[] = focusablesIn(scope, root)
+        .filter(el => el !== current && !current.contains(el) && !inHiddenScreen(el))
 
     // Guides with destinations act as focusable regions even when empty.
     for (const guide of Array.from(scope.querySelectorAll<HTMLElement>(`[${GUIDE_ATTRIBUTE}]`))) {
         const entry = guides.get(guide)
-        if (entry?.config.destinations?.length && !guide.contains(current) && isRendered(guide)) {
+        if (entry?.config.destinations?.length && !guide.contains(current) && isRendered(guide) && !inHiddenScreen(guide)) {
             candidates.push(guide)
         }
     }
