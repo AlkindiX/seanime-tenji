@@ -1,7 +1,7 @@
 import { useCurrentUser } from "@/atoms/server.atoms"
 import { AppTabConfig, TabBar } from "@/components/layout/tabs"
 import { TVNavBar } from "@/components/tv/tv-nav-bar"
-import { Tabs } from "expo-router"
+import { Tabs } from "expo-router/js-tabs"
 import * as React from "react"
 import { Platform, View } from "react-native"
 
@@ -60,7 +60,6 @@ export default function TabLayout() {
                         detachInactiveScreens
                         screenOptions={{
                             headerShown: false,
-                            freezeOnBlur: true,
                             animation: "none",
                             tabBarStyle: { display: "none" },
                         }}
@@ -84,7 +83,7 @@ export default function TabLayout() {
 
     return (
         <Tabs
-            screenOptions={{ headerShown: false, freezeOnBlur: true }}
+            screenOptions={{ headerShown: false }}
             tabBar={props => <TabBar user={user} tabs={tabs} {...props} />}
         >
             {tabs.map(tab => (
