@@ -324,7 +324,7 @@ export function TVPlayerControls({
                         accessibilityLabel="Show player controls"
                         style={Platform.OS === "web"
                             // Covers the video so a Magic Remote click anywhere brings the controls up.
-                            ? { position: "absolute", inset: 0, opacity: 0 }
+                            ? { position: "absolute", left: 0, top: 0, right: 0, bottom: 0, opacity: 0 }
                             : {
                                 position: "absolute",
                                 left: 0,
