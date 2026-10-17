@@ -130,12 +130,37 @@ function flattenLayers(css) {
     return out + css.slice(index)
 }
 
+/** Physical sides of the logical shorthands, for the app's left-to-right layout. */
+const LOGICAL_SIDES = { inline: ["left", "right"], block: ["top", "bottom"] }
+const LOGICAL_SHORTHAND = /([{;])(padding|margin|inset|border)-(inline|block)(-(?:style|width|color))?:([^;}]+)/g
+
+/**
+ * `padding-inline`, `margin-block`, `inset-inline`, `border-inline-style`…
+ * as physical properties. They need Chromium 87, and lightningcss only lowers
+ * values it can parse, so Tailwind's `calc(var(--spacing) * N)` is left as is.
+ */
+function lowerLogicalShorthands(css, splitTopLevel) {
+    return css.replace(LOGICAL_SHORTHAND, (whole, lead, property, axis, part = "", rawValue) => {
+        const important = /\s*!important\s*$/i.exec(rawValue)
+        const value = important ? rawValue.slice(0, important.index) : rawValue
+        const suffix = important ? "!important" : ""
+        // `border-inline: 1px solid` sets both sides alike; the others take "start end".
+        const parts = property === "border" && !part ? [value.trim()] : splitTopLevel(value)
+        if (parts.length < 1 || parts.length > 2) return whole
+        const [start, end = parts[0]] = parts
+        const [first, second] = LOGICAL_SIDES[axis]
+        const name = side => property === "inset" ? side : `${property}-${side}${part}`
+        return `${lead}${name(first)}:${start}${suffix};${name(second)}:${end}${suffix}`
+    })
+}
+
 /**
  * Tailwind v4 puts every rule in cascade layers and uses `@property` and the
  * individual `translate`/`scale`/`rotate` properties, none of which exist
  * before Chromium 99/85/104. Layers are flattened (in their declared order,
  * which is source order), `@property` initial values become plain custom
- * property defaults, and the transform properties become `transform`.
+ * property defaults, the transform properties become `transform`, and the
+ * logical shorthands (Chromium 87) become physical properties.
  */
 function lowerCss(file) {
     const source = fs.readFileSync(file, "utf8")
@@ -177,6 +202,9 @@ function lowerCss(file) {
         if (property === "rotate" && parts.length !== 1) return whole
         return `${lead}transform:${property}(${parts.slice(0, 2).join(",")})`
     })
+    css = lowerLogicalShorthands(css, splitTopLevel)
+    const left = css.match(LOGICAL_SHORTHAND)
+    if (left) throw new Error(`Logical shorthands Chromium ${CHROME} drops are still in ${path.basename(file)}: ${left.slice(0, 5).join(" ")}`)
 
     if (defaults.length > 0) {
         css = `*,:before,:after{${defaults.join(";")}}${css}`
