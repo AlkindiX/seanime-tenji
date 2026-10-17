@@ -13,11 +13,11 @@ import type {
     SubtitleHorizontalAlignment,
     SubtitleVerticalAlignment,
 } from "expo-mpv-player"
-import { useAtomValue } from "jotai/react"
+import { useAtomValue, useSetAtom } from "jotai/react"
 import React from "react"
-import { useExtractedSubtitles } from "./extracted-subtitles"
 import { findPreferredTrack, getPlayerPreferences, setPlayerPreferences } from "./player-preferences"
 import { useActivePlaybackSource } from "./session"
+import { useWebPlaybackPlan } from "./web-playback-plan"
 
 const log = logger("use-mpv-player")
 
@@ -88,14 +88,17 @@ const INITIAL_STATE: PlayerState = {
  */
 export function useMpvPlayer() {
     const source = useActivePlaybackSource()
-    const extractedSubtitles = useExtractedSubtitles(source)
+    const playbackPlan = useWebPlaybackPlan(source)
     const loadingMessage = useAtomValue(playerLoadingMessageAtom)
     const error = useAtomValue(playerErrorAtom)
+    const setPlayerError = useSetAtom(playerErrorAtom)
 
     const viewRef = React.useRef<MpvPlayerViewRef>(null)
     const [state, setState] = React.useState(INITIAL_STATE)
     const loadedSourceId = React.useRef<string | null>(null)
     const durationRef = React.useRef(0)
+    const positionRef = React.useRef(0)
+    const loadedUrlRef = React.useRef<{ sourceId: string; url: string } | null>(null)
     const bufferingStartedAtRef = React.useRef<number | null>(null)
     const readyLoggedRef = React.useRef(false)
     const eofLoggedRef = React.useRef(false)
@@ -113,25 +116,31 @@ export function useMpvPlayer() {
     // Build the video source prop from the atom
     // ---------------------------------------------------------------------------
     const videoSource = React.useMemo<MpvVideoSource | undefined>(() => {
-        // undefined while the web build is still asking the server for subtitle tracks
-        if (!source || !extractedSubtitles) return undefined
+        // undefined while the web build is still asking the server about the file
+        if (!source || !playbackPlan) return undefined
 
         const prefs = getPlayerPreferences()
         const externalSubtitles = source.externalSubtitles?.map(s => ({
             url: s.url,
             title: s.language || undefined,
         }))
+        const extractedSubtitles = playbackPlan.externalSubtitles
 
-        return {
-            url: source.url,
-            headers: source.headers,
+        const videoSource: MpvVideoSource = {
+            url: playbackPlan.url ?? source.url,
+            headers: playbackPlan.headers ?? source.headers,
             externalSubtitles: extractedSubtitles.length > 0
                 ? [...externalSubtitles ?? [], ...extractedSubtitles]
                 : externalSubtitles,
-            startPosition: source.resumePositionSec,
+            startPosition: playbackPlan.startPosition ?? source.resumePositionSec,
             autoplay: prefs.autoPlay,
         }
-    }, [extractedSubtitles, source])
+        // Web player only; native plans never set these.
+        if (playbackPlan.preferMse) videoSource.preferMse = true
+        if (playbackPlan.chapters?.length) videoSource.chapters = playbackPlan.chapters
+        if (playbackPlan.mediaInfoSummary) videoSource.mediaInfoSummary = playbackPlan.mediaInfoSummary
+        return videoSource
+    }, [playbackPlan, source])
     const shouldAutoplay = videoSource?.autoplay ?? true
 
     const nowPlayingMetadata = React.useMemo<NowPlayingMetadata | undefined>(() => {
@@ -166,6 +175,7 @@ export function useMpvPlayer() {
 
         loadedSourceId.current = source.id
         durationRef.current = 0
+        positionRef.current = 0
         bufferingStartedAtRef.current = null
         readyLoggedRef.current = false
         eofLoggedRef.current = false
@@ -188,6 +198,22 @@ export function useMpvPlayer() {
         })
         setState({ ...INITIAL_STATE, status: "loading", paused: !shouldAutoplay })
     }, [shouldAutoplay, source])
+
+    // The web plan can swap the URL of the same source (direct play that the
+    // TV could not decode -> the server's transcode): load it like a new one.
+    React.useLayoutEffect(() => {
+        if (!source || !videoSource) return
+        const previous = loadedUrlRef.current
+        loadedUrlRef.current = { sourceId: source.id, url: videoSource.url }
+        if (!previous || previous.sourceId !== source.id || previous.url === videoSource.url) return
+
+        log.info("Player source URL changed", getPlayerLogData(source))
+        readyLoggedRef.current = false
+        tracksLogRef.current = null
+        hasAppliedDefaultTracks.current = false
+        hasAppliedPrefs.current = false
+        setState(s => ({ ...s, status: "loading", audioTracks: [], subtitleTracks: [], chapters: [] }))
+    }, [source, videoSource])
 
     // cleanup buffering debounce timer on unmount
     React.useEffect(() => {
@@ -222,6 +248,7 @@ export function useMpvPlayer() {
     const onNativeProgress = React.useCallback((event: NativeEvent<OnProgressEventPayload>) => {
         const { position, duration, cacheSeconds } = event.nativeEvent
         durationRef.current = duration
+        positionRef.current = position
 
         setState(s => {
             if (s.currentTime === position && s.duration === duration && s.cacheSeconds === cacheSeconds) return s
@@ -321,10 +348,23 @@ export function useMpvPlayer() {
         })
     }, [source])
 
+    const onPlaybackError = playbackPlan?.onPlaybackError
     const onNativeError = React.useCallback((event: NativeEvent<OnErrorEventPayload>) => {
         log.error("Native player error", getPlayerLogData(source), event.nativeEvent.error)
+
+        // Web only: the plan may retry through the server's transcode, or explain the error.
+        const handled = onPlaybackError?.({
+            message: event.nativeEvent.error,
+            code: event.nativeEvent.code,
+            position: positionRef.current,
+        })
+        if (handled === true) {
+            setState(s => ({ ...s, status: "loading" }))
+            return
+        }
+        if (typeof handled === "string") setPlayerError(handled)
         setState(s => ({ ...s, status: "error" }))
-    }, [source])
+    }, [onPlaybackError, setPlayerError, source])
 
     const onNativePictureInPictureChange = React.useCallback((event: NativeEvent<OnPictureInPictureChangeEventPayload>) => {
         const { isActive } = event.nativeEvent

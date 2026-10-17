@@ -32,6 +32,28 @@ export type MpvVideoSource = {
     externalSubtitles?: MpvExternalSubtitle[]
     startPosition?: number
     autoplay?: boolean
+    /**
+     * Web player only (native ignores the fields below). Play HLS through
+     * hls.js even where the browser plays it natively, so every request
+     * carries `headers` (the TV's own HLS player sends none).
+     */
+    preferMse?: boolean
+    /** Chapters known from elsewhere; mpv reads them from the file. */
+    chapters?: MpvChapter[]
+    /** How the source was chosen, shown with the technical info. */
+    mediaInfoSummary?: MpvMediaInfoSummary
+}
+
+export type MpvMediaInfoSummary = {
+    mode: "direct" | "transcode"
+    /** Why it is transcoded, or why it may not play. */
+    reasons?: string[]
+    videoCodec?: string
+    audioCodec?: string
+    /** e.g. "1920×1080", from the file rather than the decoder. */
+    resolution?: string
+    /** The TV model and webOS version, when known. */
+    device?: string
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -62,6 +84,8 @@ export type OnPlaybackStateChangePayload = {
 
 export type OnErrorEventPayload = {
     error: string
+    /** Web player only: the HTMLMediaElement MediaError code (3 decode, 4 unsupported). */
+    code?: number
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -116,6 +140,10 @@ export type TechnicalInfo = {
     requestedHwdec?: string
     hwdecOptionResult?: number
     decoderError?: string
+    /** Web player only: why the file is transcoded or may not play. */
+    playbackNote?: string
+    /** Web player only: the TV model and webOS version. */
+    device?: string
 }
 
 ///////////////////////////////////////////////////////////////////////////////

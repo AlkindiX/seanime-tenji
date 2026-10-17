@@ -65,8 +65,33 @@ in desktop Chromium, not yet with the TV's speech.
 The built-in player is the TV's HTML5 video engine, not libmpv.
 
 - **Containers and codecs:** whatever the TV's media pipeline decodes. That is usually
-  MKV and MP4 with H.264/HEVC video and AAC/AC-3/E-AC-3 audio. 10-bit H.264 and some
-  lossless audio formats may not play. HLS (online streams) plays natively.
+  MKV and MP4 with H.264 (8-bit, up to High profile), HEVC Main/Main10, VP9 and AV1
+  video, and AAC/AC-3/E-AC-3 audio. HLS (online streams) plays natively.
+- **Direct play or transcoding (library files).** Before playing a library file, Tenji asks
+  the server for its codecs and checks them against what the TV decodes:
+  - It plays the file as it is (*direct play*) unless it knows the TV can't. Files it
+    sends to the server's transcoder instead: **10-bit H.264 (Hi10P)**, common in anime
+    BD encodes, and H.264 4:2:2/4:4:4, which LG's decoders don't support; 12-bit or 4:2:2
+    HEVC; Dolby Vision on a TV without it; 4K on a Full HD TV; and an unusual codec the
+    browser says it can't decode. A toast says why ("Transcoding: this TV can't play
+    10-bit H.264 (Hi10P)").
+  - If a direct-played file still fails to decode, Tenji switches to transcoding once and
+    carries on from the same position.
+  - Transcoding needs FFmpeg on the server and *transcoding enabled* in its media
+    streaming settings (and *direct play only* off). Without it, Tenji plays the file
+    directly anyway, warns that it may not play, and, if it fails, says what the TV could
+    not decode and how to turn transcoding on.
+  - The transcode is H.264 + AAC over HLS, played through hls.js so that every playlist
+    and segment request carries the server password (the TV's own HLS player can't add
+    it). Leaving the player stops the server's transcode.
+  - Audio the browser says it can't play (e.g. DTS, TrueHD, sometimes Opus or FLAC) only
+    gives a warning: the TV's file player often plays what its MSE check refuses.
+  - Torrent, debrid and online streams play as they are; the server can't transcode
+    them. When the TV can't decode one, the error says so.
+- **Playback stats** (Info key) show the mode (`html5 · direct play`, or
+  `html5+hls.js · transcode`), the file's codecs, why it is transcoded, and the TV model.
+- **Chapters** of library files come from the server, so the seek bar shows them (and the
+  chapter name while seeking) as on Android TV.
 - **Audio tracks** can be switched when the TV exposes them, which webOS does.
 - **Subtitles** are drawn by the app: SRT, WebVTT and ASS dialogue lines. ASS styling and
   positioned typesetting (signs) are not rendered.
@@ -81,7 +106,8 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
 
 On webOS, Settings shows the model, webOS version (the platform version the TV reports,
 e.g. 6.3.0), panel resolution, HDR10 and Dolby Vision support, and which notable video
-formats the browser says it decodes, which helps with bug reports. They come from
+formats the browser says it decodes, which helps with bug reports. The same facts feed the playback
+decision above (4K files on a Full HD panel, Dolby Vision). They come from
 `webOSSystem.deviceInfo`/`PalmSystem.deviceInfo` and two Luna calls through
 `PalmServiceBridge` (no webOSTV.js): `com.webos.service.tv.systemproperty/getSystemInfo`
 (model, firmware, UHD) and `com.webos.service.config/getConfigs` (HDR10, Dolby Vision, panel
@@ -89,7 +115,8 @@ resolution). `appinfo.json` declares their access control group (ACG), `systemco
 which webOS TV 26 enforces when `requiredACG` is present and webOS TV 27 requires. LG's ACG
 guide lists it for `getSystemInfo` and for webOSTV.js's `deviceInfo()` (which reads the same
 configs); `getConfigs` has no row of its own, so this is an assumption to check. A refused
-or unanswered call (3 seconds) just leaves that fact unknown.
+or unanswered call (3 seconds) just leaves that fact unknown, and unknown never triggers
+transcoding.
 
 ## Remote control
 
@@ -132,6 +159,10 @@ are released, so a long seek doesn't continue when you come back.
 - **OK in pointer mode.** If a TV sends both a keydown 13 and a click for one OK press, a
   button would fire twice. This needs checking on a TV before adding any de-duplication.
 - How far one wheel notch scrolls (`deltaY` per notch) on a real Magic Remote.
+- Playback of the transcoded HLS stream, and whether `canPlayType`/`MediaSource` answers
+  on a TV match what its file player really decodes. Desktop Chromium was used for the
+  checks: the open-source build has no H.264, so the transcode's requests (all
+  authenticated) were checked but not its picture.
 - The real answers of the Luna calls on each webOS version, and ACG enforcement on webOS 26.
 
 ## Developing
@@ -151,6 +182,10 @@ webOS setup (see `metro.config.js`):
     with the key map in `remote-input.ts`)
 - `modules/expo-mpv-player/src/*.web.ts(x)` is the HTML5 `<video>` stand-in for the
   libmpv view.
+- `src/lib/player/web-playback-plan.web.ts` decides how a source is played (direct or
+  transcoded, extracted subtitles, chapters, start position), with the rules in
+  `src/lib/webos/playback-capabilities.ts` and the TV's facts from `device-info.ts` and
+  `luna.ts`.
 - `webos/build.mjs` builds the app. It makes every URL relative so the app works from
   `file://`, and lowers JS/CSS to Chromium 79. It also adds polyfills and writes the
   `.ipk`.

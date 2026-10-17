@@ -74,6 +74,12 @@ export function PlayerStatsOverlay({
             <Text style={[styles.statsText, { fontSize: size, lineHeight }]}>Dropped    {dropped}</Text>
             <Text style={[styles.statsText, { fontSize: size, lineHeight }]}>Buffer     {info.isBuffering ? "yes" : "no"} · cache {cache}</Text>
             <Text style={[styles.statsText, { fontSize: size, lineHeight }]}>Cache cap  {cap}</Text>
+            {info.playbackNote ? (
+                <Text style={[styles.statsText, { fontSize: size, lineHeight, maxWidth: 620 }]}>Why        {info.playbackNote}</Text>
+            ) : null}
+            {info.device ? (
+                <Text style={[styles.statsText, { fontSize: size, lineHeight }]}>Device     {info.device}</Text>
+            ) : null}
             {info.decoderError ? (
                 <Text style={[styles.statsError, { fontSize: size, lineHeight }]}>Error      {info.decoderError}</Text>
             ) : null}

@@ -14,6 +14,8 @@ export { MpvPlayerModule } from "./MpvPlayerModule"
 export type {
     MpvVideoSource,
     MpvExternalSubtitle,
+    MpvMediaInfoSummary,
+    MpvChapter,
     NowPlayingMetadata,
     MpvVideoOutput,
     SubtitleHorizontalAlignment,

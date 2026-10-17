@@ -189,7 +189,7 @@ export const MpvPlayerView = React.forwardRef<MpvPlayerViewRef, MpvPlayerViewPro
             isPictureInPictureActive: async () => false,
 
             getSubtitleTracks: async () => player().getSubtitleTracks(),
-            getChapters: async () => [],
+            getChapters: async () => player().getChapters(),
             setSubtitleTrack: trackId => run(p => p.setSubtitleTrack(trackId)),
             disableSubtitles: () => run(p => p.disableSubtitles()),
             getCurrentSubtitleTrack: async () => player().getCurrentSubtitleTrack(),

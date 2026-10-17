@@ -10,6 +10,7 @@ import type {
     Onlinestream_VideoSource,
 } from "@/api/generated/types"
 import type { ServerLocalIdentity } from "@/lib/offline/server-local-store"
+import type { MpvChapter, MpvExternalSubtitle, MpvMediaInfoSummary } from "expo-mpv-player"
 
 ///////////////////////////////////////////////////////////////////////////////
 // Mobile playback source
@@ -109,6 +110,33 @@ export type MobilePlaybackSource = {
     onlineSource?: Onlinestream_VideoSource
 
     episodes?: Anime_Episode[]
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Web playback plan
+///////////////////////////////////////////////////////////////////////////////
+
+/**
+ * How the web (webOS) player should play a source. Native builds play the
+ * source as it is, so only `externalSubtitles` is ever set there.
+ */
+export type WebPlaybackPlan = {
+    /** Subtitle tracks the server extracted from the file. */
+    externalSubtitles: MpvExternalSubtitle[]
+    /** Replaces the source URL and headers, e.g. with the server's HLS transcode. */
+    url?: string
+    headers?: Record<string, string>
+    /** Replaces the resume position, e.g. after switching to transcoding mid-episode. */
+    startPosition?: number
+    preferMse?: boolean
+    chapters?: MpvChapter[]
+    mediaInfoSummary?: MpvMediaInfoSummary
+    /**
+     * Called when the player reports an error. `true`: handled, a new plan
+     * is on its way. A string: the message to show instead. `null`: nothing
+     * to add.
+     */
+    onPlaybackError?: (error: { message: string; code?: number; position: number }) => true | string | null
 }
 
 ///////////////////////////////////////////////////////////////////////////////

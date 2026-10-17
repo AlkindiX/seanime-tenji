@@ -4,11 +4,13 @@
  * It reproduces the parts of the mpv view's contract the app uses: the same
  * events, 1-based track ids, subtitle delay/visibility and zoom. Codec support
  * is whatever the TV's media pipeline offers; HLS plays natively where the
- * browser can (webOS) and through hls.js elsewhere.
+ * browser can (webOS) and through hls.js elsewhere, or always through hls.js
+ * when the source asks for it (`preferMse`), so every request carries its headers.
  */
 import Hls from "hls.js"
 import type {
     AudioTrack,
+    MpvChapter,
     MpvVideoSource,
     OnPlaybackStateChangePayload,
     OnProgressEventPayload,
@@ -21,7 +23,7 @@ export type WebVideoPlayerCallbacks = {
     onLoad: (payload: { url: string }) => void
     onProgress: (payload: OnProgressEventPayload) => void
     onPlaybackStateChange: (payload: OnPlaybackStateChangePayload) => void
-    onError: (payload: { error: string }) => void
+    onError: (payload: { error: string; code?: number }) => void
     onTracksReady: () => void
     onSubtitleCues: (cues: SubtitleCue[]) => void
 }
@@ -118,7 +120,7 @@ export class WebVideoPlayer {
         on("error", () => {
             const error = video.error
             if (!error || !this.source) return
-            this.callbacks.onError({ error: error.message || MEDIA_ERRORS[error.code] || "Playback failed" })
+            this.callbacks.onError({ error: error.message || MEDIA_ERRORS[error.code] || "Playback failed", code: error.code })
         })
 
         video.textTracks.addEventListener?.("addtrack", () => this.callbacks.onTracksReady())
@@ -141,9 +143,16 @@ export class WebVideoPlayer {
 
         const { video } = this
         video.autoplay = false
+        const headers = Object.entries(source.headers ?? {}).filter(([name]) => !FORBIDDEN_HEADERS.test(name))
+        // The TV's own HLS player can't add headers to playlist and segment
+        // requests, and a file:// app has to authenticate every request to
+        // the Seanime server, so its streams ask for hls.js (`preferMse`).
+        // Other streams keep the native player: hls.js requests are subject
+        // to CORS, which third-party hosts may not allow.
+        const useHlsJs = isHlsUrl(source.url) && Hls.isSupported()
+            && (source.preferMse || !video.canPlayType("application/vnd.apple.mpegurl"))
 
-        if (isHlsUrl(source.url) && !video.canPlayType("application/vnd.apple.mpegurl") && Hls.isSupported()) {
-            const headers = Object.entries(source.headers ?? {}).filter(([name]) => !FORBIDDEN_HEADERS.test(name))
+        if (useHlsJs) {
             const hls = new Hls({
                 startPosition: source.startPosition ?? -1,
                 xhrSetup: (xhr) => {
@@ -152,13 +161,20 @@ export class WebVideoPlayer {
             })
             hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => this.callbacks.onTracksReady())
             hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => this.callbacks.onTracksReady())
+            let recoveries = 0
             hls.on(Hls.Events.ERROR, (_event, data) => {
                 if (!data.fatal) return
-                if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                if (data.type !== Hls.ErrorTypes.MEDIA_ERROR) {
+                    this.callbacks.onError({ error: `HLS ${data.type}: ${data.details}` })
+                    return
+                }
+                // A decoder hiccup is worth a retry or two; codecs the browser
+                // doesn't have are not, and would otherwise retry forever.
+                if (data.details !== Hls.ErrorDetails.MANIFEST_INCOMPATIBLE_CODECS_ERROR && recoveries++ < 2) {
                     hls.recoverMediaError()
                     return
                 }
-                this.callbacks.onError({ error: `HLS ${data.type}: ${data.details}` })
+                this.callbacks.onError({ error: `${MEDIA_ERRORS[3]} (${data.details})`, code: 3 })
             })
             hls.loadSource(source.url)
             hls.attachMedia(video)
@@ -459,16 +475,27 @@ export class WebVideoPlayer {
     // Info
     ///////////////////////////////////////////////////////////////////////////
 
+    getChapters(): MpvChapter[] {
+        return this.source?.chapters ?? []
+    }
+
     getTechnicalInfo(): TechnicalInfo {
         const quality = this.video.getVideoPlaybackQuality?.()
+        const summary = this.source?.mediaInfoSummary
+        const engine = this.hls ? "html5+hls.js" : "html5"
+        const mode = summary ? (summary.mode === "transcode" ? " · transcode" : " · direct play") : ""
         return {
             videoWidth: this.video.videoWidth || undefined,
             videoHeight: this.video.videoHeight || undefined,
+            videoCodec: summary?.videoCodec,
+            audioCodec: summary?.audioCodec,
             cacheSeconds: this.bufferedAhead(),
             droppedFrames: quality?.droppedVideoFrames,
             isBuffering: this.video.readyState < 3,
-            voDriver: this.hls ? "html5+hls.js" : "html5",
+            voDriver: engine + mode,
             hwdec: "browser",
+            playbackNote: summary?.reasons?.length ? summary.reasons.join(", ") : undefined,
+            device: summary?.device,
         }
     }
 }

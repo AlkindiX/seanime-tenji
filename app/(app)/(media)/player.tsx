@@ -51,6 +51,7 @@ import {
 import type { PlayerChapter } from "@/lib/player"
 import { getLocalEpisodePlaybackSource } from "@/lib/player"
 import { usePlayerPreferences } from "@/lib/player/player-preferences"
+import { getWatchHistoryResumePosition } from "@/lib/player/resume-position"
 import type { MobilePlaybackSource } from "@/lib/player/types"
 import { useContinuitySync } from "@/lib/player/use-continuity-sync"
 import { useMpvPlayer } from "@/lib/player/use-mpv-player"
@@ -244,14 +245,8 @@ function PlayerScreenInner() {
             ? source.resumePositionSec
             : null
 
-        if (resumeTarget === null && watchHistory) {
-            const item = watchHistory[source.mediaId]
-            if (item && item.episodeNumber === source.episodeNumber) {
-                const ratio = item.duration > 0 ? item.currentTime / item.duration : 0
-                if (ratio < 0.9 && ratio >= 0.02) {
-                    resumeTarget = item.currentTime
-                }
-            }
+        if (resumeTarget === null) {
+            resumeTarget = getWatchHistoryResumePosition(watchHistory, source)
         }
 
         if (resumeTarget === null) {
