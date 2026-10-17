@@ -287,12 +287,13 @@ function TracksHome(props: Props & { preferred: boolean }) {
             icon: <Timer size={ICON} color="#ffffff" />,
             press: () => props.onNavigate("subtitle-delay"),
         },
-        {
+        // The webOS player is the TV's <video> element, which can't delay audio.
+        ...(Platform.OS === "web" ? [] : [{
             label: "Audio delay",
             detail: delayLabel(props.state.audioDelay),
             icon: <Timer size={ICON} color="#ffffff" />,
             press: () => props.onNavigate("audio-delay"),
-        },
+        }]),
         {
             label: "Subtitle size",
             detail: `${props.prefs.subtitleFontSize}`,
