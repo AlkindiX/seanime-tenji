@@ -9,7 +9,7 @@ type WebOSSystem = {
     deviceInfo?: string
 }
 
-type WebOSWindow = Window & {
+type WebOSWindow = {
     webOSSystem?: WebOSSystem
     PalmSystem?: WebOSSystem
 }
@@ -25,11 +25,29 @@ export function isWebOSDevice() {
     return typeof navigator !== "undefined" && /Web0S|webOS/i.test(navigator.userAgent)
 }
 
-/** Back on the first screen hands control back to the TV, as LG's guidelines ask. */
+/**
+ * `platformBack()` bound to the object that has it. Newer TVs expose both
+ * `webOSSystem` and `PalmSystem`, and either may lack the method (LG's
+ * webOSTV.js only ever calls `PalmSystem.platformBack`).
+ */
+export function findPlatformBack(w: WebOSWindow): (() => void) | null {
+    for (const owner of [w.webOSSystem, w.PalmSystem]) {
+        if (owner && typeof owner.platformBack === "function") {
+            return () => owner.platformBack!()
+        }
+    }
+    return null
+}
+
+/**
+ * Back on the first screen hands control back to the TV, as LG's guidelines
+ * ask: webOS 6 and later show the system's exit popup, older releases go to
+ * the launcher. `window.close()` (no popup) is only for desktop browsers.
+ */
 export function exitApp() {
-    const webos = system()
-    if (webos?.platformBack) {
-        webos.platformBack()
+    const platformBack = findPlatformBack(window as WebOSWindow)
+    if (platformBack) {
+        platformBack()
         return
     }
     window.close()
@@ -50,6 +68,27 @@ function onVisibilityEvent(name: string, callback: (visible: boolean) => void) {
 /** The Magic Remote pointer appears when the remote is moved and hides after a few seconds. */
 export function onCursorVisibilityChange(callback: (visible: boolean) => void) {
     return onVisibilityEvent("cursorStateChange", callback)
+}
+
+/**
+ * `webOSMouse` says whether the pointer is over the app: "Leave" when the app
+ * went to the background or a system overlay or toast took the pointer.
+ */
+export function onPointerPresenceChange(callback: (inside: boolean) => void) {
+    if (typeof document === "undefined") return () => {}
+    const handler = (event: Event) => {
+        const type = (event as Event & { detail?: { type?: string } }).detail?.type
+        if (type === "Enter" || type === "Leave") callback(type === "Enter")
+    }
+    document.addEventListener("webOSMouse", handler)
+    return () => document.removeEventListener("webOSMouse", handler)
+}
+
+/** Fired before the app comes back from the background (it is relaunched while running). */
+export function onRelaunch(callback: () => void) {
+    if (typeof document === "undefined") return () => {}
+    document.addEventListener("webOSRelaunch", callback, true)
+    return () => document.removeEventListener("webOSRelaunch", callback, true)
 }
 
 type KeyboardEventName = "keyboardDidShow" | "keyboardDidHide" | "keyboardWillShow" | "keyboardWillHide"

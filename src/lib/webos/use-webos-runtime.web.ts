@@ -1,7 +1,7 @@
 import NetInfo from "@react-native-community/netinfo"
 import { router } from "expo-router"
 import * as React from "react"
-import { setFallbackBackHandler } from "./remote"
+import { onPointerActivity, setFallbackBackHandler } from "./remote"
 
 // NetInfo's web build probes "/" for internet reachability, which a file://
 // app can't fetch. Connectivity comes from navigator.onLine instead.
@@ -21,4 +21,12 @@ export function useWebOSRuntime() {
         })
         return () => setFallbackBackHandler(null)
     }, [])
+}
+
+/** Runs `callback` while the Magic Remote pointer moves or clicks (throttled in remote.ts). */
+export function usePointerActivity(callback: () => void) {
+    const latest = React.useRef(callback)
+    latest.current = callback
+
+    React.useEffect(() => onPointerActivity(() => latest.current()), [])
 }

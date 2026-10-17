@@ -56,6 +56,7 @@ import { useContinuitySync } from "@/lib/player/use-continuity-sync"
 import { useMpvPlayer } from "@/lib/player/use-mpv-player"
 import { cn } from "@/lib/utils"
 import { toast } from "@/lib/utils/toast"
+import { usePointerActivity } from "@/lib/webos/use-webos-runtime"
 import { useKeepAwake } from "expo-keep-awake"
 import { MpvPlayerView, type TechnicalInfo } from "expo-mpv-player"
 import { NavigationBar } from "expo-navigation-bar"
@@ -85,6 +86,8 @@ type NextEpisodePrompt = {
     title: string
     description: string
     confirmLabel: string
+    /** Defaults to playing the next episode. */
+    onConfirm?: () => void
 }
 
 const DEFAULT_TEXT_SUBTITLE_MARGIN_Y = 34
@@ -289,6 +292,15 @@ function PlayerScreenInner() {
         playerSeekTo,
     })
 
+    /** Skips the opening or ending being played; false when neither is. */
+    const skipCurrentSegment = React.useCallback(() => {
+        const interval = showSkipIntro ? skipData.op?.interval : showSkipOutro ? skipData.ed?.interval : undefined
+        if (!interval) return false
+        playerSeekTo(interval.endTime)
+        toast.info(showSkipIntro ? "Skipped opening intro" : "Skipped ending outro")
+        return true
+    }, [playerSeekTo, showSkipIntro, showSkipOutro, skipData])
+
     const videoAspectRatio = getSourceVideoAspectRatio(source)
     const fillZoomScale = getFillZoomScale(screenWidth, screenHeight, videoAspectRatio)
 
@@ -301,6 +313,16 @@ function PlayerScreenInner() {
         : !source?.media?.episodes || source.episodeNumber >= source.media.episodes
             ? null
             : source.episodeNumber + 1
+
+    const previousEpisode = !source?.episodes || source.episodes.length === 0
+        ? null
+        : source.episodes.find(e => e.episodeNumber === source.episodeNumber - 1) ?? null
+
+    const previousEpisodeNumber = previousEpisode
+        ? previousEpisode.episodeNumber
+        : !source || source.episodeNumber <= 1
+            ? null
+            : source.episodeNumber - 1
     const canPreloadTorrent = source?.nextEpisodeAction === "torrentstream-auto-select"
     const { data: torrentstreamSettings } = useGetTorrentstreamSettings(canPreloadTorrent)
     const { mutate: preloadTorrentStream } = useTorrentstreamStartStream({ muteError: true })
@@ -352,6 +374,11 @@ function PlayerScreenInner() {
         gRef,
         Platform.isTV ? TV_CONTROLS_HIDE_DELAY : undefined,
     )
+
+    // Moving or clicking the Magic Remote pointer shows the controls, as a tap does on a phone.
+    usePointerActivity(() => {
+        if (!state.isPiPActive) controls.showControls()
+    })
 
     // settings panel
     const [panel, setPanel] = React.useState<PlayerPanel | null>(null)
@@ -776,6 +803,14 @@ function PlayerScreenInner() {
             return
         }
 
+        if (
+            tvKeyAction(event) === 1
+            && !nextEpisodePrompt
+            && !showExitPrompt
+            && autoNext.autoNextCountdown === null
+            && handleRemoteShortcut(event.eventType)
+        ) return
+
         if (panel || nextEpisodePrompt || showExitPrompt) return
 
         if (tvKeyAction(event) === 0) return
@@ -887,6 +922,10 @@ function PlayerScreenInner() {
     const nextEpisodeLabel = nextEpisode?.displayTitle
         ?? (nextEpisodeNumber ? `Episode ${nextEpisodeNumber}` : "the next episode")
 
+    const canPlayPrevious = Boolean(source?.nextEpisodeAction)
+        && previousEpisodeNumber !== null
+        && (source?.nextEpisodeAction !== "local-file" || previousEpisode !== null)
+
     const canAutoAdvance = canPlayNext
         && source?.nextEpisodeAction !== "torrentstream-manual"
         && source?.nextEpisodeAction !== "debridstream-manual"
@@ -982,9 +1021,10 @@ function PlayerScreenInner() {
     }, [controls, state.paused])
 
     const confirmNextEpisodePrompt = React.useCallback(() => {
+        const confirm = nextEpisodePrompt?.onConfirm ?? playNextEpisode
         setNextEpisodePrompt(null)
-        playNextEpisode()
-    }, [playNextEpisode])
+        confirm()
+    }, [nextEpisodePrompt, playNextEpisode])
 
     const autoNext = useAutoNextEpisode({
         sourceId: source?.id,
@@ -1029,6 +1069,99 @@ function PlayerScreenInner() {
             return
         }
         playNextEpisode()
+    }
+
+    function handlePreviousEpisode() {
+        if (!source || !canPlayPrevious) {
+            toast.info("No previous episode")
+            return
+        }
+        autoNext.cancelAutoNext()
+        controls.clearHideTimer()
+
+        const label = previousEpisode?.displayTitle ?? `Episode ${previousEpisodeNumber}`
+        const play = () => playEpisodeSelection(previousEpisode, previousEpisodeNumber)
+        if (source.nextEpisodeAction === "torrentstream-manual" || source.nextEpisodeAction === "debridstream-manual") {
+            setNextEpisodePrompt({
+                title: "Choose previous episode source?",
+                description: `Going back to ${label} will return you to the source picker.`,
+                confirmLabel: "Continue",
+                onConfirm: play,
+            })
+            return
+        }
+        if (shouldConfirmEarlySkip) {
+            setNextEpisodePrompt({
+                title: "Play previous episode?",
+                description: `${formatTime(remainingTime)} is still left in this episode. Start ${label} now?`,
+                confirmLabel: "Play previous",
+                onConfirm: play,
+            })
+            return
+        }
+        play()
+    }
+
+    /**
+     * One-press shortcuts for the remote's extra keys: colour keys, Info,
+     * Stop, CH+/CH- and the number keys. LG remotes send them on webOS, and
+     * Android TV remotes that have them send the same events. Returns true
+     * when the key was used.
+     */
+    function handleRemoteShortcut(type: string): boolean {
+        const togglePanel = (target: PlayerPanel) => {
+            if (panel === target) {
+                closeSettings()
+                return
+            }
+            controls.clearHideTimer()
+            setPanel(target)
+        }
+
+        switch (type) {
+            case "red":
+                togglePanel("audio-subtitles")
+                return true
+            case "green":
+                if ((source?.episodes?.length ?? 0) > 1) togglePanel("episodes")
+                else toast.info("No other episodes")
+                return true
+            case "blue":
+                togglePanel("main")
+                return true
+            case "yellow":
+                if (!panel && !skipCurrentSegment()) controls.showControls()
+                return !panel
+            case "info":
+                updatePrefs({ showStats: !prefs.showStats })
+                if (!panel) controls.showControls()
+                return true
+            case "stop":
+                setPanel(null)
+                controls.clearHideTimer()
+                setShowExitPrompt(true)
+                return true
+        }
+
+        // The rest act on playback, so they wait until a panel is closed.
+        if (panel) return false
+
+        if (type === "channelUp") {
+            if (canPlayNext) handleManualNextEpisode()
+            else toast.info("No next episode")
+            return true
+        }
+        if (type === "channelDown") {
+            handlePreviousEpisode()
+            return true
+        }
+        // 0 to 9 jump to that tenth of the episode (0 is the start).
+        if (/^[0-9]$/.test(type)) {
+            if (state.duration > 0) player.seekTo(state.duration * Number(type) / 10)
+            controls.showControls()
+            return true
+        }
+        return false
     }
 
     // episode list selection
@@ -1260,10 +1393,9 @@ function PlayerScreenInner() {
                             canShowEpisodes={(source?.episodes?.length ?? 0) > 1}
                             skipLabel={showSkipIntro ? "Skip intro" : showSkipOutro ? "Skip outro" : undefined}
                             onSkip={(showSkipIntro || showSkipOutro) ? () => {
-                                const target = showSkipIntro ? skipData.op!.interval.endTime : skipData.ed!.interval.endTime
-                                playerSeekTo(target)
-                                toast.info(showSkipIntro ? "Skipped opening intro" : "Skipped ending outro")
+                                skipCurrentSegment()
                             } : undefined}
+                            onSeekTo={player.seekTo}
                             onTogglePlayPause={player.togglePlayPause}
                             onSeekRelative={player.seekRelative}
                             onPlayNext={handleManualNextEpisode}

@@ -204,6 +204,25 @@ function isScrollable(el: HTMLElement, axis: "x" | "y") {
     return axis === "x" ? el.scrollWidth > el.clientWidth + 1 : el.scrollHeight > el.clientHeight + 1
 }
 
+/** The nearest ancestor that scrolls along `axis`, if any. */
+export function scrollableAncestor(el: Element, axis: "x" | "y"): HTMLElement | null {
+    for (let node = el.parentElement; node && node !== document.documentElement; node = node.parentElement) {
+        if (isScrollable(node, axis)) return node
+    }
+    return null
+}
+
+/** The nearest ancestor that scrolls at all, with the axes it scrolls along. */
+export function nearestScroller(el: Element): { node: HTMLElement; x: boolean; y: boolean } | null {
+    for (let node: Element | null = el; node && node !== document.documentElement; node = node.parentElement) {
+        if (!isElement(node)) continue
+        const x = isScrollable(node, "x")
+        const y = isScrollable(node, "y")
+        if (x || y) return { node, x, y }
+    }
+    return null
+}
+
 /** Scrolls every scrollable ancestor so the element sits away from the edges. */
 export function revealElement(el: HTMLElement) {
     const target = el.getBoundingClientRect()
@@ -277,7 +296,7 @@ export function getFocusedElement() {
  * Moves focus one step. Returns false when there is nowhere to go, which
  * mirrors the native engine leaving focus where it is.
  */
-export function moveFocus(direction: Direction): boolean {
+export function moveFocus(direction: Direction, options: { reveal?: boolean } = {}): boolean {
     const root = getFocusRoot()
     const current = getFocusedElement()
     if (!current) return focusInitial()
@@ -305,7 +324,42 @@ export function moveFocus(direction: Direction): boolean {
     const best = pickBest(rectOf(current), candidates, direction)
     if (!best) return false
 
-    return focusElement(redirectIntoGuides(best, current, root))
+    return focusElement(redirectIntoGuides(best, current, root), options)
+}
+
+/** Most single steps a page turn takes; virtualized lists only render a few screens anyway. */
+const MAX_PAGE_STEPS = 40
+
+/**
+ * Moves focus about one screen up or down inside the vertical scroller
+ * around the focused element (CH+/CH- on the remote). Returns false when
+ * focus is not in a scroller, so the caller can leave the key alone.
+ */
+export function pageFocus(direction: "up" | "down"): boolean {
+    const start = getFocusedElement()
+    if (!start) return false
+    const scroller = scrollableAncestor(start, "y")
+    if (!scroller) return false
+
+    const startTop = start.getBoundingClientRect().top
+    const distance = scroller.clientHeight * 0.8
+    let last = start
+
+    for (let i = 0; i < MAX_PAGE_STEPS; i++) {
+        if (!moveFocus(direction, { reveal: false })) break
+        const next = getFocusedElement()
+        if (!next || next === last) break
+        if (!scroller.contains(next)) {
+            // Stepped out of the list (into a nav bar or header): stay on its edge.
+            last.focus({ preventScroll: true })
+            break
+        }
+        last = next
+        if (Math.abs(next.getBoundingClientRect().top - startTop) >= distance) break
+    }
+
+    if (last !== start) revealElement(last)
+    return true
 }
 
 /** Applies `destinations` / `autoFocus` of guides that focus is entering. */

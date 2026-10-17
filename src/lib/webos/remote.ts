@@ -5,8 +5,26 @@
  * developing) into what react-native-tvos gives the app natively: D-pad
  * focus movement, `useTVEventHandler` events and `hardwareBackPress`.
  */
-import { type Direction, focusElement, focusInitial, getFocusedElement, moveFocus, trackFocus } from "./spatial-navigation"
-import { emitKeyboardEvent, exitApp, onCursorVisibilityChange, onKeyboardVisibilityChange } from "./webos-platform"
+import { createWheelStepper, isDigitEventType, remoteEventType } from "./remote-input"
+import {
+    type Direction,
+    focusElement,
+    focusInitial,
+    getFocusedElement,
+    moveFocus,
+    nearestScroller,
+    pageFocus,
+    scrollableAncestor,
+    trackFocus,
+} from "./spatial-navigation"
+import {
+    emitKeyboardEvent,
+    exitApp,
+    onCursorVisibilityChange,
+    onKeyboardVisibilityChange,
+    onPointerPresenceChange,
+    onRelaunch,
+} from "./webos-platform"
 
 export type TVRemoteEvent = {
     eventType: string
@@ -15,41 +33,7 @@ export type TVRemoteEvent = {
 }
 
 type Listener = (event: TVRemoteEvent) => void
-
-const KEY_CODES: Record<number, string> = {
-    37: "left",
-    38: "up",
-    39: "right",
-    40: "down",
-    13: "select",
-    415: "play",
-    19: "pause",
-    179: "playPause",
-    413: "stop",
-    417: "fastForward",
-    412: "rewind",
-    33: "channelUp",
-    34: "channelDown",
-    457: "info",
-    403: "red",
-    404: "green",
-    405: "yellow",
-    406: "blue",
-}
-
-const KEY_NAMES: Record<string, string> = {
-    ArrowLeft: "left",
-    ArrowUp: "up",
-    ArrowRight: "right",
-    ArrowDown: "down",
-    Enter: "select",
-    MediaPlayPause: "playPause",
-    MediaPlay: "play",
-    MediaPause: "pause",
-    MediaStop: "stop",
-    MediaFastForward: "fastForward",
-    MediaRewind: "rewind",
-}
+type PointerListener = () => void
 
 /** webOS sends 461 for Back; Escape and Backspace stand in for it on a desktop. */
 const BACK_KEY_CODE = 461
@@ -60,12 +44,14 @@ const LONG_PRESS_TYPES = new Set(["left", "right", "up", "down", "select"])
 const PRESS_AND_RELEASE_TYPES = new Set(["left", "right", "up", "down", "select"])
 
 const listeners = new Set<Listener>()
+const pointerListeners = new Set<PointerListener>()
 const backListeners: Array<() => boolean | null | undefined> = []
 let fallbackBackHandler: (() => boolean) | null = null
 const modalStack: Array<{ close: () => void }> = []
 const longPressed = new Set<string>()
 let installed = false
 let pointerMode = false
+let checkFocusSoon: () => void = () => {}
 
 export function addTVEventListener(listener: Listener) {
     listeners.add(listener)
@@ -146,7 +132,26 @@ export function handleBack() {
 }
 
 function eventTypeOf(event: KeyboardEvent) {
-    return KEY_CODES[event.keyCode] ?? KEY_NAMES[event.key]
+    return remoteEventType(event.keyCode, event.key)
+}
+
+/** Keys a text field keeps for itself: the caret keys and the digits. */
+function belongsToTextField(type: string) {
+    return type === "left" || type === "right" || isDigitEventType(type)
+}
+
+function longType(type: string) {
+    return `long${type[0].toUpperCase()}${type.slice(1)}`
+}
+
+/**
+ * A key held while the app is hidden never reports its release, which would
+ * leave a long press (and the player's long seek) running. End them all.
+ */
+function releaseHeldKeys() {
+    const held = Array.from(longPressed)
+    longPressed.clear()
+    for (const type of held) emit({ eventType: longType(type), eventKeyAction: 1 })
 }
 
 function isBackKey(event: KeyboardEvent) {
@@ -168,8 +173,8 @@ function onKeyDown(event: KeyboardEvent) {
 
     const active = document.activeElement
     const inTextField = isTextField(active)
-    // Left/right move the caret while typing; everything else navigates.
-    if (inTextField && (type === "left" || type === "right")) return
+    // Left/right move the caret and digits type while typing; everything else navigates.
+    if (inTextField && belongsToTextField(type)) return
     if (inTextField && type === "select" && active instanceof HTMLInputElement) {
         // Let react-native-web submit first, then close the keyboard.
         setTimeout(() => {
@@ -181,7 +186,7 @@ function onKeyDown(event: KeyboardEvent) {
     if (event.repeat && LONG_PRESS_TYPES.has(type)) {
         if (!longPressed.has(type)) {
             longPressed.add(type)
-            emit({ eventType: `long${type[0].toUpperCase()}${type.slice(1)}`, eventKeyAction: 0 })
+            emit({ eventType: longType(type), eventKeyAction: 0 })
         }
     } else if (!event.repeat && PRESS_AND_RELEASE_TYPES.has(type)) {
         emit({ eventType: type, eventKeyAction: 0 })
@@ -194,6 +199,10 @@ function onKeyDown(event: KeyboardEvent) {
     } else if (type === "select" && !getFocusedElement()) {
         event.preventDefault()
         focusInitial()
+    } else if (type === "channelUp" || type === "channelDown") {
+        // CH+/CH- page through lists. The TV event still goes out on release
+        // (the player switches episodes with it); outside a list nothing scrolls.
+        if (pageFocus(type === "channelUp" ? "up" : "down")) event.preventDefault()
     }
 }
 
@@ -206,10 +215,10 @@ function onKeyUp(event: KeyboardEvent) {
 
     const type = eventTypeOf(event)
     if (!type) return
-    if (isTextField(document.activeElement) && (type === "left" || type === "right")) return
+    if (isTextField(document.activeElement) && belongsToTextField(type)) return
 
     if (longPressed.delete(type)) {
-        emit({ eventType: `long${type[0].toUpperCase()}${type.slice(1)}`, eventKeyAction: 1 })
+        emit({ eventType: longType(type), eventKeyAction: 1 })
         return
     }
     emit({ eventType: type, eventKeyAction: 1 })
@@ -220,6 +229,51 @@ function setPointerMode(enabled: boolean) {
     document.documentElement.toggleAttribute("data-tv-pointer", enabled)
 }
 
+/**
+ * Called while the Magic Remote pointer moves or clicks (a few times a
+ * second at most), so screens can react to it like a touch. The player
+ * shows its controls.
+ */
+export function onPointerActivity(listener: PointerListener) {
+    pointerListeners.add(listener)
+    return () => {
+        pointerListeners.delete(listener)
+    }
+}
+
+const POINTER_ACTIVITY_INTERVAL = 250
+/** Hand tremor and layout-driven synthetic moves don't count as moving the pointer. */
+const POINTER_MIN_TRAVEL = 4
+
+let lastPointerActivity = 0
+let lastPointer: { x: number; y: number } | null = null
+
+function notifyPointerActivity(force: boolean) {
+    const now = Date.now()
+    if (!force && now - lastPointerActivity < POINTER_ACTIVITY_INTERVAL) return
+    lastPointerActivity = now
+    for (const listener of Array.from(pointerListeners)) {
+        try {
+            listener()
+        } catch (error) {
+            console.error("[webOS] pointer listener failed", error)
+        }
+    }
+}
+
+function onMouseMove(event: MouseEvent) {
+    const previous = lastPointer
+    if (previous && Math.abs(previous.x - event.screenX) + Math.abs(previous.y - event.screenY) < POINTER_MIN_TRAVEL) return
+    lastPointer = { x: event.screenX, y: event.screenY }
+    if (!pointerMode) setPointerMode(true)
+    notifyPointerActivity(false)
+}
+
+function onMouseDown() {
+    if (!pointerMode) setPointerMode(true)
+    notifyPointerActivity(true)
+}
+
 /** With the Magic Remote pointer, focus follows the cursor so TV highlights still show. */
 function onPointerOver(event: MouseEvent) {
     if (!pointerMode || !(event.target instanceof Element)) return
@@ -227,6 +281,44 @@ function onPointerOver(event: MouseEvent) {
     if (target && target !== document.activeElement && !isTextField(document.activeElement)) {
         focusElement(target, { reveal: false })
     }
+}
+
+/** One focus step per wheel notch at most, and no faster than this. */
+const wheelStep = createWheelStepper({ step: 100, interval: 120 })
+
+/**
+ * The Magic Remote wheel. Without the pointer (5-way mode) it scrolls
+ * whatever was last under the cursor while focus stays put, so the next
+ * arrow press jumps back. Instead it moves focus through the list around
+ * the focused element, and does nothing outside one (the player).
+ *
+ * With the pointer, the browser scrolls as usual, except over a list that
+ * only scrolls sideways (a rail), which the wheel would otherwise skip.
+ */
+function onWheel(event: WheelEvent) {
+    if (event.ctrlKey) return
+
+    if (!pointerMode) {
+        event.preventDefault()
+        const focused = getFocusedElement()
+        if (focused && !scrollableAncestor(focused, "y")) return
+        const step = wheelStep(event.deltaY, event.deltaMode, Date.now())
+        if (step !== 0) moveFocus(step > 0 ? "down" : "up")
+        return
+    }
+
+    if (!(event.target instanceof Element) || event.deltaY === 0 || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return
+    const scroller = nearestScroller(event.target)
+    if (!scroller || !scroller.x || scroller.y) return
+    const { node } = scroller
+    const delta = event.deltaMode === 0 ? event.deltaY : event.deltaY * 40
+    const canScroll = delta > 0
+        ? node.scrollLeft + node.clientWidth < node.scrollWidth - 1
+        : node.scrollLeft > 0
+    // At either end the page underneath scrolls instead, so it never gets stuck.
+    if (!canScroll) return
+    event.preventDefault()
+    node.scrollLeft += delta
 }
 
 /**
@@ -243,6 +335,10 @@ function watchLostFocus() {
     const schedule = () => {
         if (pending === null) pending = setTimeout(check, 250)
     }
+    checkFocusSoon = () => {
+        if (pending !== null) clearTimeout(pending)
+        pending = setTimeout(check, 0)
+    }
     document.addEventListener("focusout", schedule, true)
     setInterval(() => {
         if (!getFocusedElement()) schedule()
@@ -258,14 +354,26 @@ export function installRemote() {
     document.addEventListener("focusin", event => {
         if (event.target instanceof Element) trackFocus(event.target)
     }, true)
-    document.addEventListener("mousemove", () => {
-        if (!pointerMode) setPointerMode(true)
-    }, { passive: true })
+    document.addEventListener("mousemove", onMouseMove, { passive: true })
+    document.addEventListener("mousedown", onMouseDown, { capture: true, passive: true })
     document.addEventListener("mouseover", onPointerOver, true)
+    window.addEventListener("wheel", onWheel, { capture: true, passive: false })
     onCursorVisibilityChange(setPointerMode)
+    // A system overlay took the pointer: show the D-pad focus again.
+    onPointerPresenceChange((inside) => {
+        if (!inside && pointerMode) setPointerMode(false)
+    })
     onKeyboardVisibilityChange((visible) => {
         const active = document.activeElement
         if (!visible && isTextField(active)) active.blur()
     })
     watchLostFocus()
+
+    // Leaving the app (Home, an input switch) swallows the release of a held key.
+    document.addEventListener("visibilitychange", () => {
+        if (document.hidden) releaseHeldKeys()
+        else checkFocusSoon()
+    })
+    window.addEventListener("blur", releaseHeldKeys)
+    onRelaunch(() => checkFocusSoon())
 }

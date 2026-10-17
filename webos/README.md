@@ -65,6 +65,48 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   players, picture-in-picture, audio delay.
 - **Online streams** that require a `Referer` header can't send it from a browser.
 
+## Remote control
+
+The arrow keys, OK and Back work as on Android TV. LG remotes also have these keys:
+
+| Key | In the player | Elsewhere |
+| --- | --- | --- |
+| Red | Audio & subtitles (press again to close) | |
+| Green | Episodes | |
+| Yellow | Skip the intro or outro when the button is offered, otherwise show the controls | |
+| Blue | Settings | |
+| Info | Show or hide playback stats | |
+| Stop | Ask to leave the player | |
+| CH+ / CH- | Next / previous episode (asks first when much of the episode is left) | Page up / down through a list or grid |
+| 0 to 9 | Jump to 0 %, 10 % … 90 % of the episode | Type into a text field |
+| Play, Pause, ⏩, ⏪ | Play, pause, seek | |
+
+Android TV remotes that have these keys get the same player shortcuts.
+
+**Magic Remote pointer.** Moving the pointer or clicking the video shows the player
+controls, and clicking the timeline seeks to that spot. Focus follows the pointer. When
+the pointer hides or a system overlay takes it, the D-pad highlight comes back.
+
+**Wheel.** With the pointer showing, the wheel scrolls the page; over a row that only
+scrolls sideways it scrolls the row, and the page again once the row reaches its end.
+Without the pointer (after an arrow key), each notch moves focus one step up or down
+through the list, as LG asks apps to keep the wheel working in 5-way mode. In the player
+it does nothing.
+
+**Leaving the app.** Back on the first screen calls `platformBack()`, which shows the
+system's exit popup on webOS 6 and later. Keys held while the app goes to the background
+are released, so a long seek doesn't continue when you come back.
+
+### Not yet verified on a TV
+
+- **CH+/CH-.** LG's Magic Remote key table marks *Channel +/-* as not available to apps,
+  so some TVs may keep these keys for themselves. They are mapped to keyCodes 33/34
+  (PageUp/PageDown) in case a TV delivers them; the player's buttons and panels cover the
+  same actions.
+- **OK in pointer mode.** If a TV sends both a keydown 13 and a click for one OK press, a
+  button would fire twice. This needs checking on a TV before adding any de-duplication.
+- How far one wheel notch scrolls (`deltaY` per notch) on a real Magic Remote.
+
 ## Developing
 
 ```bash
@@ -78,7 +120,8 @@ webOS setup (see `metro.config.js`):
 - `src/lib/webos/` holds the react-native-tvos APIs for the web:
   - `TVFocusGuideView`, `useTVEventHandler`, `hasTVPreferredFocus` and `requestTVFocus()`
   - the D-pad focus engine (`spatial-navigation.ts`)
-  - remote keys and Back handling (`remote.ts`)
+  - remote keys, the Magic Remote pointer and wheel, and Back handling (`remote.ts`,
+    with the key map in `remote-input.ts`)
 - `modules/expo-mpv-player/src/*.web.ts(x)` is the HTML5 `<video>` stand-in for the
   libmpv view.
 - `webos/build.mjs` builds the app. It makes every URL relative so the app works from

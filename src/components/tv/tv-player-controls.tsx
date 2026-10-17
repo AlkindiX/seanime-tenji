@@ -17,6 +17,8 @@ import X from "lucide-react-native/icons/x"
 import * as React from "react"
 import {
     Animated,
+    type GestureResponderEvent,
+    Platform,
     Pressable,
     Text,
     TVFocusGuideView,
@@ -25,6 +27,22 @@ import {
 } from "react-native"
 
 const FOCUS_BORDER = "#ffffff"
+
+/**
+ * Where a Magic Remote pointer click landed on a bar, from 0 to 1. Null for
+ * presses that came from the remote's OK key, which react-native-web reports
+ * with the key event.
+ */
+function pointerFraction(event: GestureResponderEvent | undefined): number | null {
+    if (Platform.OS !== "web" || !event) return null
+    // Clicks arrive as React events; OK arrives as the DOM keyup event itself.
+    const native = (event.nativeEvent ?? event) as unknown as { type?: string; clientX?: number }
+    const target = event.currentTarget as unknown as { getBoundingClientRect?: () => { left: number; width: number } }
+    if (native.type !== "click" || typeof native.clientX !== "number" || !target?.getBoundingClientRect) return null
+    const box = target.getBoundingClientRect()
+    if (box.width <= 0) return null
+    return Math.max(0, Math.min(1, (native.clientX - box.left) / box.width))
+}
 
 type ControlProps = {
     label: string
@@ -177,6 +195,8 @@ type Props = {
     onSkip?: () => void
     onTogglePlayPause: () => void
     onSeekRelative: (seconds: number) => void
+    /** Seeks to a time in seconds; used when the timeline is clicked with the pointer. */
+    onSeekTo?: (seconds: number) => void
     onPlayNext: () => void
     onOpenEpisodes: () => void
     onOpenTracks: () => void
@@ -204,6 +224,7 @@ export function TVPlayerControls({
     onSkip,
     onTogglePlayPause,
     onSeekRelative,
+    onSeekTo,
     onPlayNext,
     onOpenEpisodes,
     onOpenTracks,
@@ -301,14 +322,17 @@ export function TVPlayerControls({
                         hasTVPreferredFocus
                         onPress={onShowControls}
                         accessibilityLabel="Show player controls"
-                        style={{
-                            position: "absolute",
-                            left: 0,
-                            top: 0,
-                            width: 1,
-                            height: 1,
-                            opacity: 0,
-                        }}
+                        style={Platform.OS === "web"
+                            // Covers the video so a Magic Remote click anywhere brings the controls up.
+                            ? { position: "absolute", inset: 0, opacity: 0 }
+                            : {
+                                position: "absolute",
+                                left: 0,
+                                top: 0,
+                                width: 1,
+                                height: 1,
+                                opacity: 0,
+                            }}
                     />
                 ) : null}
                 {longSeekVisible ? (
@@ -464,7 +488,16 @@ export function TVPlayerControls({
 
                     <TVFocusGuideView trapFocusLeft trapFocusRight>
                         <Pressable
-                            onPress={onTogglePlayPause}
+                            onPress={(event) => {
+                                // A pointer click seeks to that spot; OK still plays and pauses.
+                                const fraction = onSeekTo && state.duration > 0 ? pointerFraction(event) : null
+                                if (fraction === null) {
+                                    onTogglePlayPause()
+                                    return
+                                }
+                                onSeekTo!(fraction * state.duration)
+                                onControlAction()
+                            }}
                             onFocus={() => {
                                 setBarFocused(true)
                                 onControlFocus()
