@@ -17,6 +17,7 @@ import type {
     SubtitleTrack,
     TechnicalInfo,
 } from "../MpvPlayer.types"
+import { mediaOptionType, shouldReload } from "./media-pipeline"
 import { activeCues, parseSubtitles, type SubtitleCue } from "./subtitles"
 
 export type WebVideoPlayerCallbacks = {
@@ -66,6 +67,21 @@ function fileTitle(url: string) {
 /** Headers the browser forbids scripts from setting; the stream request goes out without them. */
 const FORBIDDEN_HEADERS = /^(referer|origin|host|cookie|user-agent|connection|content-length)$/i
 
+/** How long a mediaOption <source> may take to reach loadedmetadata before plain `src` is used. */
+const MEDIA_OPTION_TIMEOUT_MS = 8000
+
+/** Set once a TV rejected mediaOption, so later loads go straight to `src`. */
+let mediaOptionFailed = false
+
+function onWebOS() {
+    if (typeof window === "undefined") return false
+    const w = window as { webOSSystem?: unknown; PalmSystem?: unknown }
+    return !!(w.webOSSystem || w.PalmSystem)
+}
+
+/** Where to pick up after the app went to the background. */
+type Suspended = { position: number; subtitle: number; audio: number }
+
 export class WebVideoPlayer {
     private hls: Hls | null = null
     private source: MpvVideoSource | null = null
@@ -77,6 +93,12 @@ export class WebVideoPlayer {
     private cueTimer: ReturnType<typeof setInterval> | null = null
     private readyToSeek = false
     private readonly listeners: Array<[string, EventListener]> = []
+    private suspended: Suspended | null = null
+    /** Tracks to select again once a reloaded source is ready. */
+    private restoreTracks: Omit<Suspended, "position"> | null = null
+    private mediaOptionSource: HTMLSourceElement | null = null
+    private mediaOptionTimer: ReturnType<typeof setTimeout> | null = null
+    private readonly onVisibilityChange = () => this.handleVisibilityChange()
 
     constructor(
         private readonly video: HTMLVideoElement,
@@ -93,7 +115,10 @@ export class WebVideoPlayer {
             const firstReady = !this.readyToSeek
             this.readyToSeek = true
             this.state({ isLoading: false, isReadyToSeek: true })
-            if (firstReady) this.callbacks.onTracksReady()
+            if (firstReady) {
+                this.applyRestoredTracks()
+                this.callbacks.onTracksReady()
+            }
         })
         on("play", () => this.state({ isPaused: false }))
         on("playing", () => {
@@ -126,6 +151,8 @@ export class WebVideoPlayer {
         video.textTracks.addEventListener?.("addtrack", () => this.callbacks.onTracksReady())
         const audioTracks = this.audioTrackList()
         audioTracks?.addEventListener?.("addtrack", () => this.callbacks.onTracksReady())
+
+        if (typeof document !== "undefined") document.addEventListener("visibilitychange", this.onVisibilityChange)
     }
 
     ///////////////////////////////////////////////////////////////////////////
@@ -179,6 +206,8 @@ export class WebVideoPlayer {
             hls.loadSource(source.url)
             hls.attachMedia(video)
             this.hls = hls
+        } else if (this.canUseMediaOption(source)) {
+            this.loadWithMediaOption(source)
         } else {
             video.src = source.url
             video.load()
@@ -192,6 +221,7 @@ export class WebVideoPlayer {
     destroy() {
         this.reset()
         for (const [type, listener] of this.listeners) this.video.removeEventListener(type, listener)
+        if (typeof document !== "undefined") document.removeEventListener("visibilitychange", this.onVisibilityChange)
     }
 
     private reset() {
@@ -203,9 +233,13 @@ export class WebVideoPlayer {
         this.selectedSubtitle = 0
         this.readyToSeek = false
         this.lastCueKey = ""
+        this.suspended = null
+        this.restoreTracks = null
+        this.clearMediaOption()
         this.callbacks.onSubtitleCues([])
         this.video.pause()
         this.video.removeAttribute("src")
+        while (this.video.firstChild) this.video.removeChild(this.video.firstChild)
         this.video.load()
     }
 
@@ -213,8 +247,13 @@ export class WebVideoPlayer {
         const source = this.source
         if (!source) return
 
-        if (!this.hls && source.startPosition && source.startPosition > 0) {
-            this.video.currentTime = source.startPosition
+        const usedMediaOption = !!this.mediaOptionSource
+        this.clearMediaOptionTimer()
+        const start = source.startPosition ?? 0
+        // With mediaOption the TV already started there; desktop browsers ignore it.
+        const alreadyThere = usedMediaOption && Math.abs(this.video.currentTime - start) <= 2
+        if (!this.hls && start > 0 && !alreadyThere) {
+            this.video.currentTime = start
         }
         this.callbacks.onLoad({ url: source.url })
         this.emitProgress()
@@ -225,6 +264,95 @@ export class WebVideoPlayer {
         } else {
             this.state({ isPaused: true })
         }
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    // Resuming with webOS mediaOption
+    ///////////////////////////////////////////////////////////////////////////
+
+    private canUseMediaOption(source: MpvVideoSource) {
+        return !mediaOptionFailed && onWebOS() && !isHlsUrl(source.url)
+            && (source.startPosition ?? 0) > 0 && this.video.canPlayType("video/mp4") !== ""
+    }
+
+    /**
+     * Hands the start position to the TV's media pipeline in the <source>
+     * type. If the TV refuses it, or nothing loads within a few seconds, the
+     * file is loaded again the usual way and seeked after loadedmetadata.
+     */
+    private loadWithMediaOption(source: MpvVideoSource) {
+        const element = document.createElement("source")
+        element.src = source.url
+        element.type = mediaOptionType(source.startPosition ?? 0)
+        element.addEventListener("error", () => this.fallBackFromMediaOption(element))
+        this.mediaOptionSource = element
+        this.video.appendChild(element)
+        this.video.load()
+        this.mediaOptionTimer = setTimeout(() => this.fallBackFromMediaOption(element), MEDIA_OPTION_TIMEOUT_MS)
+    }
+
+    private fallBackFromMediaOption(element: HTMLSourceElement) {
+        if (this.mediaOptionSource !== element || !this.source) return
+        console.warn("[web-video-player] mediaOption was not accepted; loading the file without it")
+        mediaOptionFailed = true
+        this.clearMediaOption()
+        this.video.src = this.source.url
+        this.video.load()
+    }
+
+    private clearMediaOptionTimer() {
+        if (this.mediaOptionTimer !== null) clearTimeout(this.mediaOptionTimer)
+        this.mediaOptionTimer = null
+    }
+
+    private clearMediaOption() {
+        this.clearMediaOptionTimer()
+        this.mediaOptionSource?.remove()
+        this.mediaOptionSource = null
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    // Background and foreground
+    ///////////////////////////////////////////////////////////////////////////
+
+    /**
+     * webOS suspends a hidden app and may hand the hardware decoder to
+     * whatever took the screen. Hidden: pause where we are (the pause event
+     * records the position like a user pause). Visible again: reload at that
+     * position if the pipeline was released, and stay paused either way, as
+     * TV apps come back paused with the controls up. Resuming on its own is
+     * deliberately not done.
+     */
+    private handleVisibilityChange() {
+        if (!this.source) return
+        const { video } = this
+
+        if (document.hidden) {
+            this.suspended = {
+                position: video.currentTime,
+                subtitle: this.selectedSubtitle,
+                audio: this.getCurrentAudioTrack(),
+            }
+            this.stopCueTimer()
+            this.pause()
+            return
+        }
+
+        const suspended = this.suspended
+        this.suspended = null
+        if (!suspended || !shouldReload(video.readyState, video.networkState, !!video.error)) return
+
+        const source = this.source
+        this.load({ ...source, startPosition: suspended.position, autoplay: false })
+        this.restoreTracks = { subtitle: suspended.subtitle, audio: suspended.audio }
+    }
+
+    private applyRestoredTracks() {
+        const restore = this.restoreTracks
+        this.restoreTracks = null
+        if (!restore) return
+        if (restore.audio > 0) this.setAudioTrack(restore.audio)
+        if (restore.subtitle > 0) this.setSubtitleTrack(restore.subtitle)
     }
 
     ///////////////////////////////////////////////////////////////////////////

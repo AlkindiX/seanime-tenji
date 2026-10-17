@@ -92,6 +92,16 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   `html5+hls.js · transcode`), the file's codecs, why it is transcoded, and the TV model.
 - **Chapters** of library files come from the server, so the seek bar shows them (and the
   chapter name while seeking) as on Android TV.
+- **Background.** Pressing Home or switching inputs pauses playback where it is. If the TV
+  released the video decoder meanwhile, the episode is loaded again at that position when
+  the app comes back, with the same audio and subtitle tracks. It comes back paused with
+  the controls up; resuming on its own is deliberately not done.
+- **Resuming** ("continue watching") hands the start position to the TV's media pipeline
+  with LG's `mediaOption` parameter, so it doesn't buffer from the start of the file first.
+  If the TV rejects it, or the file hasn't loaded after 8 seconds, Tenji loads the file the
+  usual way and seeks, and skips `mediaOption` for the rest of the session. *Not verified on
+  a TV*: desktop Chromium plays the `<source>` but ignores the option, so the checks covered
+  passing the position, the seek that follows and the fallback, not the speed-up.
 - **Audio tracks** can be switched when the TV exposes them, which webOS does.
 - **Subtitles** are drawn by the app: SRT, WebVTT and ASS dialogue lines. ASS styling and
   positioned typesetting (signs) are not rendered.
@@ -164,6 +174,7 @@ are released, so a long seek doesn't continue when you come back.
   checks: the open-source build has no H.264, so the transcode's requests (all
   authenticated) were checked but not its picture.
 - The real answers of the Luna calls on each webOS version, and ACG enforcement on webOS 26.
+- Whether `mediaOption` resumes faster on a TV (see Resuming).
 
 ## Developing
 
