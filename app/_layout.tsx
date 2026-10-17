@@ -103,7 +103,7 @@ export default function RootLayout() {
     useWebOSRuntime()
 
     React.useEffect(() => {
-        if (!Platform.isTVOS) return
+        if (Platform.OS !== "ios" || !Platform.isTV) return
 
         const trace = __DEV__
             ? ExpoTVFocus.addTraceListener(({ message }) => {

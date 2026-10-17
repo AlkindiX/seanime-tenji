@@ -124,6 +124,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
             "expo-updates",
             "expo-image",
         ],
+        web: {
+            // The webOS build is a single-page app loaded from file://.
+            output: "single",
+        },
         experiments: {
             typedRoutes: true,
             reactCompiler: true,

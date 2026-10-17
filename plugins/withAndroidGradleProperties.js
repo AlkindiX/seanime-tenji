@@ -3,6 +3,9 @@ const { withGradleProperties } = require("expo/config-plugins")
 const PROPS = {
     reactNativeArchitectures: "arm64-v8a,armeabi-v7a",
     "org.gradle.jvmargs": "-Xmx2048m -XX:MaxMetaspaceSize=1024m",
+    // SDK 58 turns R8 on for release builds. The local native modules (libmpv
+    // JNI callbacks among them) ship no keep rules, so keep it off for now.
+    "android.enableMinifyInReleaseBuilds": "false",
 }
 
 function setProp(props, key, value) {
