@@ -9,6 +9,7 @@ import { NAV_THEME } from "@/lib/constants"
 import { OtaUpdatePrompt } from "@/lib/ota/updates"
 import { hydrateQueryClient, OFFLINE_QUERY_KEYS, setupQueryPersistence } from "@/lib/query-persistence"
 import { useColorScheme } from "@/lib/useColorScheme"
+import { useWebOSRuntime } from "@/lib/webos/use-webos-runtime"
 import { Ionicons } from "@expo/vector-icons"
 import { PortalHost } from "@rn-primitives/portal"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
@@ -99,6 +100,7 @@ export default function RootLayout() {
 
     useTVFocusLogger()
     useConnectionStateMonitor()
+    useWebOSRuntime()
 
     React.useEffect(() => {
         if (!Platform.isTVOS) return

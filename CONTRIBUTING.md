@@ -58,6 +58,22 @@ To compile and run the debug application on an iOS simulator:
 npm run dev:ios
 ```
 
+### Developing for LG webOS
+
+The webOS build renders the TV interface in a browser. To develop it, run:
+
+```bash
+npm run dev:webos
+```
+
+Then open http://localhost:8083 at 1920×1080; arrow keys, Enter and Escape act as the remote. To produce the installable `.ipk` in `dist/webos/`, run:
+
+```bash
+npm run build:webos
+```
+
+See the [webOS guide](webos/README.md) for installing it on a TV and how the build works.
+
 ---
 
 ## Code Quality Standards

@@ -7,6 +7,8 @@ import type { ViewProps } from "react-native"
 export type MpvExternalSubtitle = {
     url: string
     title?: string
+    /** Language tag, used by the web player to label the track. */
+    lang?: string
 }
 
 export type NowPlayingMetadata = {

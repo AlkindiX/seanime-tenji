@@ -1,0 +1,334 @@
+/**
+ * D-pad focus engine for the webOS build.
+ *
+ * react-native-tvos moves focus natively; in a browser every Pressable is a
+ * plain focusable <div>, so this module picks the next element geometrically
+ * (the same candidate and beam rules Android's FocusFinder uses) and honours
+ * the TVFocusGuideView options the app relies on: `trapFocus*`, `autoFocus`
+ * (remember the last focused child) and `destinations`.
+ */
+
+export type Direction = "up" | "down" | "left" | "right"
+
+export type FocusGuideConfig = {
+    autoFocus?: boolean
+    focusable?: boolean
+    trap: Partial<Record<Direction, boolean>>
+    destinations?: readonly unknown[]
+}
+
+type GuideEntry = {
+    config: FocusGuideConfig
+    lastFocused: HTMLElement | null
+}
+
+const FOCUSABLE_SELECTOR = [
+    "[tabindex]:not([tabindex=\"-1\"])",
+    "input:not([disabled]):not([type=\"hidden\"])",
+    "textarea:not([disabled])",
+    "select:not([disabled])",
+    "button:not([disabled])",
+    "a[href]",
+].join(",")
+
+const GUIDE_ATTRIBUTE = "data-tv-guide"
+const PREFERRED_ATTRIBUTE = "data-tv-preferred"
+
+const guides = new WeakMap<Element, GuideEntry>()
+
+export function registerFocusGuide(node: HTMLElement, getConfig: () => FocusGuideConfig) {
+    const entry: GuideEntry = {
+        get config() {
+            return getConfig()
+        },
+        lastFocused: null,
+    }
+    guides.set(node, entry)
+    return () => {
+        if (guides.get(node) === entry) guides.delete(node)
+    }
+}
+
+function isElement(value: unknown): value is HTMLElement {
+    return typeof HTMLElement !== "undefined" && value instanceof HTMLElement
+}
+
+function isRendered(el: HTMLElement) {
+    if (!el.isConnected || el.getClientRects().length === 0) return false
+    const rect = el.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) return false
+    return window.getComputedStyle(el).visibility !== "hidden"
+}
+
+function insideUnfocusableGuide(el: HTMLElement, root: Element) {
+    for (let node = el.parentElement; node && node !== root.parentElement; node = node.parentElement) {
+        const entry = guides.get(node)
+        if (entry && entry.config.focusable === false) return true
+    }
+    return false
+}
+
+export function isFocusable(el: unknown, root: Element = document.body): el is HTMLElement {
+    if (!isElement(el) || !el.matches(FOCUSABLE_SELECTOR)) return false
+    if (el.getAttribute("aria-disabled") === "true") return false
+    return isRendered(el) && !insideUnfocusableGuide(el, root)
+}
+
+/** The active modal (react-native-web renders `aria-modal`), or the document. */
+export function getFocusRoot(): HTMLElement {
+    const modals = Array.from(document.querySelectorAll<HTMLElement>("[aria-modal=\"true\"]"))
+        .filter(isRendered)
+    return modals[modals.length - 1] ?? document.body
+}
+
+function focusablesIn(scope: Element, root: Element) {
+    return Array.from(scope.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+        .filter(el => isFocusable(el, root))
+}
+
+function guidesAround(el: Element, until: Element) {
+    const found: HTMLElement[] = []
+    for (let node = el.parentElement; node && node !== until.parentElement; node = node.parentElement) {
+        if (guides.has(node)) found.push(node)
+    }
+    return found
+}
+
+function firstFocusableIn(scope: Element, root: Element) {
+    return focusablesIn(scope, root)[0] ?? null
+}
+
+function resolveDestination(destinations: readonly unknown[] | undefined, root: Element) {
+    for (const destination of destinations ?? []) {
+        if (!isElement(destination) || !root.contains(destination)) continue
+        if (isFocusable(destination, root)) return destination
+        const inner = firstFocusableIn(destination, root)
+        if (inner) return inner
+    }
+    return null
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Geometry
+///////////////////////////////////////////////////////////////////////////////
+
+type Rect = { left: number; top: number; right: number; bottom: number }
+
+function rectOf(el: Element): Rect {
+    const r = el.getBoundingClientRect()
+    return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
+}
+
+function isCandidate(from: Rect, to: Rect, direction: Direction) {
+    switch (direction) {
+        case "left":
+            return (from.right > to.right || from.left >= to.right) && from.left > to.left
+        case "right":
+            return (from.left < to.left || from.right <= to.left) && from.right < to.right
+        case "up":
+            return (from.bottom > to.bottom || from.top >= to.bottom) && from.top > to.top
+        case "down":
+            return (from.top < to.top || from.bottom <= to.top) && from.bottom < to.bottom
+    }
+}
+
+function inBeam(from: Rect, to: Rect, direction: Direction) {
+    if (direction === "left" || direction === "right") {
+        return to.bottom > from.top && to.top < from.bottom
+    }
+    return to.right > from.left && to.left < from.right
+}
+
+function majorDistance(from: Rect, to: Rect, direction: Direction) {
+    switch (direction) {
+        case "left":
+            return Math.max(0, from.left - to.right)
+        case "right":
+            return Math.max(0, to.left - from.right)
+        case "up":
+            return Math.max(0, from.top - to.bottom)
+        case "down":
+            return Math.max(0, to.top - from.bottom)
+    }
+}
+
+function minorDistance(from: Rect, to: Rect, direction: Direction) {
+    if (direction === "left" || direction === "right") {
+        return Math.abs((from.top + from.bottom) / 2 - (to.top + to.bottom) / 2)
+    }
+    return Math.abs((from.left + from.right) / 2 - (to.left + to.right) / 2)
+}
+
+function pickBest<T extends Element>(from: Rect, candidates: T[], direction: Direction): T | null {
+    let best: T | null = null
+    let bestInBeam = false
+    let bestScore = Number.POSITIVE_INFINITY
+
+    for (const candidate of candidates) {
+        const rect = rectOf(candidate)
+        if (!isCandidate(from, rect, direction)) continue
+
+        const beam = inBeam(from, rect, direction)
+        const major = majorDistance(from, rect, direction)
+        const minor = minorDistance(from, rect, direction)
+        // Elements sharing the row/column always win over diagonal ones.
+        const score = beam ? major * 1000 + minor : 13 * major * major + minor * minor
+
+        if ((beam && !bestInBeam) || (beam === bestInBeam && score < bestScore)) {
+            best = candidate
+            bestInBeam = beam
+            bestScore = score
+        }
+    }
+
+    return best
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Focusing
+///////////////////////////////////////////////////////////////////////////////
+
+function isScrollable(el: HTMLElement, axis: "x" | "y") {
+    const style = window.getComputedStyle(el)
+    const overflow = axis === "x" ? style.overflowX : style.overflowY
+    if (overflow !== "auto" && overflow !== "scroll") return false
+    return axis === "x" ? el.scrollWidth > el.clientWidth + 1 : el.scrollHeight > el.clientHeight + 1
+}
+
+/** Scrolls every scrollable ancestor so the element sits away from the edges. */
+export function revealElement(el: HTMLElement) {
+    const target = el.getBoundingClientRect()
+
+    for (let node = el.parentElement; node && node !== document.documentElement; node = node.parentElement) {
+        const scrollX = isScrollable(node, "x")
+        const scrollY = isScrollable(node, "y")
+        if (!scrollX && !scrollY) continue
+
+        const box = node.getBoundingClientRect()
+        let dx = 0
+        let dy = 0
+
+        if (scrollX) {
+            const margin = Math.min(box.width * 0.12, 160)
+            if (target.left < box.left + margin) dx = target.left - box.left - margin
+            else if (target.right > box.right - margin) dx = target.right - box.right + margin
+        }
+        if (scrollY) {
+            const margin = Math.min(box.height * 0.2, 200)
+            if (target.top < box.top + margin) dy = target.top - box.top - margin
+            else if (target.bottom > box.bottom - margin) dy = target.bottom - box.bottom + margin
+        }
+
+        if (dx !== 0 || dy !== 0) {
+            node.scrollBy({ left: dx, top: dy, behavior: "smooth" })
+        }
+    }
+}
+
+export function focusElement(el: HTMLElement, options: { reveal?: boolean } = {}) {
+    const root = getFocusRoot()
+    const target = isFocusable(el, root) ? el : firstFocusableIn(el, root)
+    if (!target) return false
+
+    target.focus({ preventScroll: true })
+    if (options.reveal !== false) revealElement(target)
+    return document.activeElement === target
+}
+
+function readingOrder(a: HTMLElement, b: HTMLElement) {
+    const ra = a.getBoundingClientRect()
+    const rb = b.getBoundingClientRect()
+    return Math.round(ra.top - rb.top) || Math.round(ra.left - rb.left)
+}
+
+/** Focuses something sensible when nothing (or something outside the active modal) has focus. */
+export function focusInitial() {
+    const root = getFocusRoot()
+    const all = focusablesIn(root, root)
+    if (all.length === 0) return false
+
+    const preferred = all.filter(el => el.hasAttribute(PREFERRED_ATTRIBUTE))
+    if (preferred.length > 0) return focusElement(preferred[preferred.length - 1])
+
+    const onScreen = all.filter((el) => {
+        const r = el.getBoundingClientRect()
+        return r.bottom > 0 && r.right > 0 && r.top < window.innerHeight && r.left < window.innerWidth
+    })
+    return focusElement((onScreen.length > 0 ? onScreen : all).sort(readingOrder)[0])
+}
+
+export function getFocusedElement() {
+    const active = document.activeElement
+    if (!isElement(active) || active === document.body) return null
+    const root = getFocusRoot()
+    return root.contains(active) ? active : null
+}
+
+/**
+ * Moves focus one step. Returns false when there is nowhere to go, which
+ * mirrors the native engine leaving focus where it is.
+ */
+export function moveFocus(direction: Direction): boolean {
+    const root = getFocusRoot()
+    const current = getFocusedElement()
+    if (!current) return focusInitial()
+
+    // A guide trapping this direction keeps the search inside it.
+    let scope: Element = root
+    for (const guide of guidesAround(current, root)) {
+        if (guides.get(guide)?.config.trap[direction]) {
+            scope = guide
+            break
+        }
+    }
+
+    const candidates: HTMLElement[] = focusablesIn(scope, root).filter(el => el !== current && !current.contains(el))
+
+    // Guides with destinations act as focusable regions even when empty.
+    for (const guide of Array.from(scope.querySelectorAll<HTMLElement>(`[${GUIDE_ATTRIBUTE}]`))) {
+        const entry = guides.get(guide)
+        if (entry?.config.destinations?.length && !guide.contains(current) && isRendered(guide)) {
+            candidates.push(guide)
+        }
+    }
+
+    const best = pickBest(rectOf(current), candidates, direction)
+    if (!best) return false
+
+    return focusElement(redirectIntoGuides(best, current, root))
+}
+
+/** Applies `destinations` / `autoFocus` of guides that focus is entering. */
+function redirectIntoGuides(target: HTMLElement, from: HTMLElement, root: Element): HTMLElement {
+    const entering = [target, ...guidesAround(target, root)]
+        .filter(node => guides.has(node) && !node.contains(from))
+        .reverse()
+
+    for (const guide of entering) {
+        const entry = guides.get(guide)!
+        const destination = resolveDestination(entry.config.destinations, root)
+        if (destination) return destination
+
+        if (entry.config.autoFocus) {
+            const last = entry.lastFocused
+            if (last && guide.contains(last) && isFocusable(last, root)) return last
+            const first = firstFocusableIn(guide, root)
+            if (first) return first
+        }
+    }
+
+    return target
+}
+
+/** Remembers the last focused child of every `autoFocus` guide. */
+export function trackFocus(el: Element) {
+    for (let node = el.parentElement; node; node = node.parentElement) {
+        const entry = guides.get(node)
+        if (entry?.config.autoFocus && isElement(el)) entry.lastFocused = el
+    }
+}
+
+export const FOCUS_ATTRIBUTES = {
+    guide: GUIDE_ATTRIBUTE,
+    preferred: PREFERRED_ATTRIBUTE,
+}

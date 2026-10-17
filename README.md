@@ -36,7 +36,7 @@ Seanime Tenji is a mobile and TV **client app** for your Seanime media server wi
 
 ## Features
 
-- **Cross-platform**: Available on Android, AndroidTV, iOS and tvOS
+- **Cross-platform**: Available on Android, AndroidTV, iOS, tvOS and LG webOS ([experimental](webos/README.md))
 - **Built-in media player**: Powered by libmpv, supports most anime codecs and formats
 - **Playback Options**: Support for server local files, torrent, debrid and online streaming
 - **Manga Reader**: Read and download chapters on iOS and Android

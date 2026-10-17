@@ -749,6 +749,21 @@ function PlayerScreenInner() {
             return
         }
 
+        // Remotes with separate media keys (LG's, some Android TV ones)
+        if (event.eventType === "play" || event.eventType === "pause") {
+            if (event.eventKeyAction === 0) return
+            if (event.eventType === "play") player.play()
+            else player.pause()
+            controls.showControls()
+            return
+        }
+        if (event.eventType === "fastForward" || event.eventType === "rewind") {
+            if (event.eventKeyAction === 0) return
+            player.seekRelative(event.eventType === "fastForward" ? prefs.buttonSeekSec : -prefs.buttonSeekSec)
+            controls.showControls()
+            return
+        }
+
         if (event.eventType === "longLeft") {
             if (event.eventKeyAction === 0) tvLongSeek.start(-1)
             if (event.eventKeyAction === 1) tvLongSeek.stop()

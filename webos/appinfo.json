@@ -1,0 +1,15 @@
+{
+    "id": "app.seanime.tenji",
+    "version": "0.0.0",
+    "vendor": "Seanime",
+    "type": "web",
+    "main": "index.html",
+    "title": "Seanime Tenji",
+    "icon": "icon.png",
+    "largeIcon": "largeIcon.png",
+    "bgColor": "#070707",
+    "resolution": "1920x1080",
+    "disableBackHistoryAPI": true,
+    "requiredACG": [],
+    "uiRevision": 2
+}

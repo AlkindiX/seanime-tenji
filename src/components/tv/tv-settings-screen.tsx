@@ -9,7 +9,7 @@ import Ionicons from "@expo/vector-icons/Ionicons"
 import { Image } from "expo-image"
 import { router } from "expo-router"
 import * as React from "react"
-import { ActivityIndicator, Animated, Pressable, ScrollView, Text, View } from "react-native"
+import { ActivityIndicator, Animated, Platform, Pressable, ScrollView, Text, View } from "react-native"
 
 type Confirm = "server" | "cache" | null
 
@@ -313,16 +313,19 @@ export function TVSettingsScreen() {
                             trailing={clearing ? <ActivityIndicator size="small" color="white" /> : undefined}
                             showChevron={!clearing}
                         />
-                        <Divider />
-                        <SettingsRow
-                            label={checkingOta ? "Checking for Update…" : "Check OTA Update"}
-                            detail={`${version.otaVersion} · ${version.detail}`}
-                            icon="code-download-outline"
-                            disabled={checkingOta}
-                            onPress={checkOta}
-                            trailing={checkingOta ? <ActivityIndicator size="small" color="white" /> : undefined}
-                            showChevron={false}
-                        />
+                        {/* The webOS (web) build is updated by reinstalling the package */}
+                        {Platform.OS !== "web" && <>
+                            <Divider />
+                            <SettingsRow
+                                label={checkingOta ? "Checking for Update…" : "Check OTA Update"}
+                                detail={`${version.otaVersion} · ${version.detail}`}
+                                icon="code-download-outline"
+                                disabled={checkingOta}
+                                onPress={checkOta}
+                                trailing={checkingOta ? <ActivityIndicator size="small" color="white" /> : undefined}
+                                showChevron={false}
+                            />
+                        </>}
                         <Divider />
                         <SettingsRow
                             ref={serverRef}

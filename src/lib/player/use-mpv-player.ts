@@ -15,6 +15,7 @@ import type {
 } from "expo-mpv-player"
 import { useAtomValue } from "jotai/react"
 import React from "react"
+import { useExtractedSubtitles } from "./extracted-subtitles"
 import { findPreferredTrack, getPlayerPreferences, setPlayerPreferences } from "./player-preferences"
 import { useActivePlaybackSource } from "./session"
 
@@ -87,6 +88,7 @@ const INITIAL_STATE: PlayerState = {
  */
 export function useMpvPlayer() {
     const source = useActivePlaybackSource()
+    const extractedSubtitles = useExtractedSubtitles(source)
     const loadingMessage = useAtomValue(playerLoadingMessageAtom)
     const error = useAtomValue(playerErrorAtom)
 
@@ -111,21 +113,25 @@ export function useMpvPlayer() {
     // Build the video source prop from the atom
     // ---------------------------------------------------------------------------
     const videoSource = React.useMemo<MpvVideoSource | undefined>(() => {
-        if (!source) return undefined
+        // undefined while the web build is still asking the server for subtitle tracks
+        if (!source || !extractedSubtitles) return undefined
 
         const prefs = getPlayerPreferences()
+        const externalSubtitles = source.externalSubtitles?.map(s => ({
+            url: s.url,
+            title: s.language || undefined,
+        }))
 
         return {
             url: source.url,
             headers: source.headers,
-            externalSubtitles: source.externalSubtitles?.map(s => ({
-                url: s.url,
-                title: s.language || undefined,
-            })),
+            externalSubtitles: extractedSubtitles.length > 0
+                ? [...externalSubtitles ?? [], ...extractedSubtitles]
+                : externalSubtitles,
             startPosition: source.resumePositionSec,
             autoplay: prefs.autoPlay,
         }
-    }, [source])
+    }, [extractedSubtitles, source])
     const shouldAutoplay = videoSource?.autoplay ?? true
 
     const nowPlayingMetadata = React.useMemo<NowPlayingMetadata | undefined>(() => {

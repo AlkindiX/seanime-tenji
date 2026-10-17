@@ -10,6 +10,8 @@
     "dev:tvos": "EXPO_TV=1 SEANIME_TV_DEV=1 expo start --clear --port 8082 --ios",
     "run:tvos": "EXPO_TV=1 SEANIME_TV_DEV=1 expo run:ios --port 8082",
     "prebuild:tvos": "EXPO_TV=1 SEANIME_TV_DEV=1 expo prebuild --platform ios --clean",
+    "dev:webos": "EXPO_TV=1 SEANIME_WEBOS=1 expo start --web --clear --port 8083",
+    "build:webos": "node ./webos/build.mjs",
     "dev:ios:offline": "expo start -c --ios --offline",
     "internal:dev:ios:device": "bash ./scripts/ios-device-build.sh",
     "internal:dev:android": "bash ./scripts/android-dev.sh phone",
@@ -33,6 +35,7 @@
     "clean": "rm -rf .expo node_modules"
   },
   "dependencies": {
+    "@expo/metro-runtime": "~56.0.21",
     "@expo/vector-icons": "^15.0.2",
     "@gorhom/bottom-sheet": "^5.2.13",
     "@likashefqet/react-native-image-zoom": "^4.3.0",
@@ -85,6 +88,7 @@
     "expo-status-bar": "~56.0.4",
     "expo-system-ui": "~56.0.5",
     "expo-updates": "~56.0.22",
+    "hls.js": "^1.7.3",
     "immer": "^11.1.3",
     "jotai": "^2.16.2",
     "jotai-immer": "^0.4.1",
@@ -105,6 +109,7 @@
     "react-native-svg": "15.15.4",
     "react-native-toast-message": "^2.3.3",
     "react-native-volume-manager": "^2.0.8",
+    "react-native-web": "~0.21.4",
     "react-native-worklets": "0.8.3",
     "tailwind-merge": "^3.4.0",
     "tailwindcss": "^4.1.0",
@@ -125,6 +130,10 @@
     "@types/lodash": "^4.17.23",
     "@types/node": "^24.0.0",
     "@types/react": "~19.2.10",
+    "core-js": "^3.50.0",
+    "core-js-compat": "^3.50.0",
+    "esbuild": "^0.28.2",
+    "lightningcss": "^1.33.0",
     "typescript": "~6.0.3"
   },
   "expo": {

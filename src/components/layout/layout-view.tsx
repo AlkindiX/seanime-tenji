@@ -1,23 +1,12 @@
 import { Styles } from "@/components/shared/styles"
 import React from "react"
-import { Platform, View } from "react-native"
+import { View } from "react-native"
 import { SafeAreaView, SafeAreaViewProps } from "react-native-safe-area-context"
 
 export function LayoutContainerView({ children }: { children?: React.ReactNode }) {
-
-    if (Platform.OS === "android") {
-        return <View style={Styles.Container}>
-            {children}
-        </View>
-    }
-
-    if (Platform.OS === "ios") {
-        return <View style={Styles.Container}>
-            {children}
-        </View>
-    }
-
-    return null
+    return <View style={Styles.Container}>
+        {children}
+    </View>
 }
 
 export function SafeView({ children, ...rest }: { children?: React.ReactNode } & SafeAreaViewProps) {
