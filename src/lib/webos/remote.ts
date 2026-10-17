@@ -54,6 +54,7 @@ const longPressed = new Set<string>()
 let installed = false
 let pointerMode = false
 let checkFocusSoon: () => void = () => {}
+let checkFocusLater: () => void = () => {}
 
 export function addTVEventListener(listener: Listener) {
     listeners.add(listener)
@@ -129,7 +130,11 @@ export function handleBack() {
         if (backListeners[i]()) return
     }
 
-    if (fallbackBackHandler?.()) return
+    if (fallbackBackHandler?.()) {
+        // The screen left behind keeps focus until the navigator hides it.
+        checkFocusLater()
+        return
+    }
     exitApp()
 }
 
@@ -199,7 +204,9 @@ function onKeyDown(event: KeyboardEvent) {
         if (pointerMode) setPointerMode(false)
         moveFocus(type as Direction)
     } else if (type === "select" && !getFocusedElement()) {
+        // Focus may still sit on a hidden screen's control; don't let it press.
         event.preventDefault()
+        event.stopPropagation()
         focusInitial()
     } else if (type === "channelUp" || type === "channelDown") {
         // CH+/CH- page through lists. The TV event still goes out on release
@@ -360,6 +367,7 @@ function watchLostFocus() {
         if (pending !== null) clearTimeout(pending)
         pending = setTimeout(check, 0)
     }
+    checkFocusLater = schedule
     document.addEventListener("focusout", schedule, true)
     document.addEventListener("focusin", () => {
         if (!pointerMode && focusIsLost()) checkFocusSoon()

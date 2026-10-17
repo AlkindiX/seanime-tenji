@@ -285,11 +285,17 @@ export function focusInitial() {
     return focusElement((onScreen.length > 0 ? onScreen : all).sort(readingOrder)[0])
 }
 
+/**
+ * The focused element, or null when focus is nowhere the D-pad can see: on
+ * <body>, outside the active modal, or left behind on a screen the navigator
+ * has since hidden (Back from a tab, a screen under a pushed one). OK must not
+ * press a control there, and the arrow keys start over on the visible screen.
+ */
 export function getFocusedElement() {
     const active = document.activeElement
     if (!isElement(active) || active === document.body) return null
     const root = getFocusRoot()
-    return root.contains(active) ? active : null
+    return root.contains(active) && !inHiddenScreen(active) ? active : null
 }
 
 /**
