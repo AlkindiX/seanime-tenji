@@ -16,6 +16,6 @@
     "accessibility": {
         "supportsAudioGuidance": true
     },
-    "requiredACG": [],
+    "requiredACG": ["systemconfig.query"],
     "uiRevision": 2
 }

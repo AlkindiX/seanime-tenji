@@ -5,6 +5,7 @@ import { TV, tvSize } from "@/components/tv/tv-scale"
 import { useServerConnectionState } from "@/lib/offline"
 import { checkForOtaUpdateManually, getOtaVersionInfo } from "@/lib/ota/updates"
 import { toast } from "@/lib/utils/toast"
+import { useDeviceSummary } from "@/lib/webos/use-device-summary"
 import Ionicons from "@expo/vector-icons/Ionicons"
 import { Image } from "expo-image"
 import { router } from "expo-router"
@@ -172,6 +173,8 @@ function Divider() {
     )
 }
 
+const noop = () => {}
+
 export function TVSettingsScreen() {
     const serverUrl = useServerUrl()
     const viewer = useCurrentUser()?.viewer
@@ -180,6 +183,7 @@ export function TVSettingsScreen() {
     const [clearing, setClearing] = React.useState(false)
     const [checkingOta, setCheckingOta] = React.useState(false)
     const version = React.useMemo(() => getOtaVersionInfo(), [])
+    const deviceSummary = useDeviceSummary()
     const cacheRef = React.useRef<RowRef>(null)
     const serverRef = React.useRef<RowRef>(null)
 
@@ -339,6 +343,29 @@ export function TVSettingsScreen() {
                             onPress={() => setConfirm("server")}
                         />
                     </SectionCard>
+
+                    {/* webOS only: what the TV reports about itself, for bug reports */}
+                    {deviceSummary && (
+                        <SectionCard title="Device">
+                            <SettingsRow
+                                label="This TV"
+                                detail={deviceSummary.device}
+                                icon="tv-outline"
+                                onPress={noop}
+                                showChevron={false}
+                            />
+                            {deviceSummary.formats.length > 0 && <>
+                                <Divider />
+                                <SettingsRow
+                                    label="Video formats"
+                                    detail={deviceSummary.formats.join(" · ")}
+                                    icon="film-outline"
+                                    onPress={noop}
+                                    showChevron={false}
+                                />
+                            </>}
+                        </SectionCard>
+                    )}
 
                 </View>
             </ScrollView>

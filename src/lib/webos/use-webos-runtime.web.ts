@@ -1,6 +1,7 @@
 import NetInfo from "@react-native-community/netinfo"
 import { router } from "expo-router"
 import * as React from "react"
+import { getDeviceInfo } from "./device-info"
 import { onPointerActivity, setFallbackBackHandler } from "./remote"
 
 // NetInfo's web build probes "/" for internet reachability, which a file://
@@ -20,6 +21,11 @@ export function useWebOSRuntime() {
             return true
         })
         return () => setFallbackBackHandler(null)
+    }, [])
+
+    // Ask the TV about itself early, so the first playback doesn't wait for it.
+    React.useEffect(() => {
+        void getDeviceInfo()
     }, [])
 }
 

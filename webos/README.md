@@ -77,6 +77,20 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   players, picture-in-picture, audio delay.
 - **Online streams** that require a `Referer` header can't send it from a browser.
 
+## About this TV
+
+On webOS, Settings shows the model, webOS version (the platform version the TV reports,
+e.g. 6.3.0), panel resolution, HDR10 and Dolby Vision support, and which notable video
+formats the browser says it decodes, which helps with bug reports. They come from
+`webOSSystem.deviceInfo`/`PalmSystem.deviceInfo` and two Luna calls through
+`PalmServiceBridge` (no webOSTV.js): `com.webos.service.tv.systemproperty/getSystemInfo`
+(model, firmware, UHD) and `com.webos.service.config/getConfigs` (HDR10, Dolby Vision, panel
+resolution). `appinfo.json` declares their access control group (ACG), `systemconfig.query`,
+which webOS TV 26 enforces when `requiredACG` is present and webOS TV 27 requires. LG's ACG
+guide lists it for `getSystemInfo` and for webOSTV.js's `deviceInfo()` (which reads the same
+configs); `getConfigs` has no row of its own, so this is an assumption to check. A refused
+or unanswered call (3 seconds) just leaves that fact unknown.
+
 ## Remote control
 
 The arrow keys, OK and Back work as on Android TV. LG remotes also have these keys:
@@ -118,6 +132,7 @@ are released, so a long seek doesn't continue when you come back.
 - **OK in pointer mode.** If a TV sends both a keydown 13 and a click for one OK press, a
   button would fire twice. This needs checking on a TV before adding any de-duplication.
 - How far one wheel notch scrolls (`deltaY` per notch) on a real Magic Remote.
+- The real answers of the Luna calls on each webOS version, and ACG enforcement on webOS 26.
 
 ## Developing
 
