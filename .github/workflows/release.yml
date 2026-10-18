@@ -1,0 +1,26 @@
+# Publishes the .ipk on this branch as a GitHub pre-release.
+name: Release webOS test build
+
+on:
+  push:
+    branches: [webos-builds]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="webos-v0.3.0-test.1"
+          gh release delete "$tag" --yes --cleanup-tag || true
+          gh release create "$tag" app.seanime.tenji_*_all.ipk SHA256SUMS \
+            --target "$GITHUB_SHA" --prerelease \
+            --title "webOS test build 0.3.0 (test 1)" \
+            --notes-file README.md
