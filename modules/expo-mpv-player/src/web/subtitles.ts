@@ -92,13 +92,14 @@ function parseSrtOrVtt(content: string): SubtitleCue[] {
     return cues.sort((a, b) => a.start - b.start)
 }
 
-function parseAss(content: string): SubtitleCue[] {
-    const cues: SubtitleCue[] = []
+/** Style name -> whether its Alignment puts lines at the top. */
+export type AssTopStyles = Map<string, boolean>
+
+/** Reads the [V4+ Styles] (or SSA [V4 Styles]) section of an ASS header. */
+export function parseAssStyles(content: string): AssTopStyles {
+    const topStyles: AssTopStyles = new Map()
     let section = ""
-    let format: string[] = []
     let styleFormat: string[] = []
-    /** Style name -> whether its Alignment puts lines at the top. */
-    const topStyles = new Map<string, boolean>()
     // SSA v4 ([V4 Styles]) numbers alignments differently from ASS ([V4+ Styles]).
     let legacyAlignment = false
 
@@ -109,23 +110,61 @@ function parseAss(content: string): SubtitleCue[] {
             legacyAlignment = section === "[v4 styles]"
             continue
         }
-        const lower = line.toLowerCase()
+        if (section !== "[v4+ styles]" && section !== "[v4 styles]") continue
 
-        if (section === "[v4+ styles]" || section === "[v4 styles]") {
-            if (lower.startsWith("format:")) {
-                styleFormat = line.slice(7).split(",").map(field => field.trim().toLowerCase())
-            } else if (lower.startsWith("style:") && styleFormat.length > 0) {
-                const values = line.slice(6).split(",").map(value => value.trim())
-                const name = values[styleFormat.indexOf("name")]
-                const alignment = Number(values[styleFormat.indexOf("alignment")])
-                if (name !== undefined && Number.isFinite(alignment)) {
-                    topStyles.set(name, legacyAlignment ? legacyAlignmentIsTop(alignment) : alignment >= 7)
-                }
+        const lower = line.toLowerCase()
+        if (lower.startsWith("format:")) {
+            styleFormat = line.slice(7).split(",").map(field => field.trim().toLowerCase())
+        } else if (lower.startsWith("style:") && styleFormat.length > 0) {
+            const values = line.slice(6).split(",").map(value => value.trim())
+            const name = values[styleFormat.indexOf("name")]
+            const alignment = Number(values[styleFormat.indexOf("alignment")])
+            if (name !== undefined && Number.isFinite(alignment)) {
+                topStyles.set(name, legacyAlignment ? legacyAlignmentIsTop(alignment) : alignment >= 7)
             }
+        }
+    }
+    return topStyles
+}
+
+/**
+ * One ASS dialogue line as a cue, or null when there is nothing to show:
+ * an empty line, or positioned typesetting (signs) this player can't draw.
+ */
+export function assDialogueCue(raw: string, start: number, end: number, style: string, topStyles: AssTopStyles): SubtitleCue | null {
+    if (/\\(pos|move)\(|\\p[1-9]/.test(raw)) return null
+
+    const text = raw
+        .replace(/\\N/gi, "\n")
+        .replace(/\\h/g, " ")
+        .replace(/\{[^}]*\}/g, "")
+        .trim()
+    if (!text) return null
+
+    return {
+        start,
+        end,
+        text,
+        // An override in the line wins over its style's alignment.
+        top: overrideIsTop(raw) ?? topStyles.get(style.replace(/^\*/, "")) ?? false,
+    }
+}
+
+function parseAss(content: string): SubtitleCue[] {
+    const cues: SubtitleCue[] = []
+    const topStyles = parseAssStyles(content)
+    let section = ""
+    let format: string[] = []
+
+    for (const rawLine of content.replace(/\r/g, "").split("\n")) {
+        const line = rawLine.trim()
+        if (line.startsWith("[")) {
+            section = line.toLowerCase()
             continue
         }
         if (section !== "[events]") continue
 
+        const lower = line.toLowerCase()
         if (lower.startsWith("format:")) {
             format = line.slice(7).split(",").map(field => field.trim().toLowerCase())
             continue
@@ -138,23 +177,8 @@ function parseAss(content: string): SubtitleCue[] {
         fields.push(values.slice(format.length - 1).join(","))
         const field = (name: string) => fields[format.indexOf(name)]?.trim() ?? ""
 
-        const raw = field("text")
-        if (/\\(pos|move)\(|\\p[1-9]/.test(raw)) continue
-
-        const text = raw
-            .replace(/\\N/gi, "\n")
-            .replace(/\\h/g, " ")
-            .replace(/\{[^}]*\}/g, "")
-            .trim()
-        if (!text) continue
-
-        cues.push({
-            start: parseTimestamp(field("start")),
-            end: parseTimestamp(field("end")),
-            text,
-            // An override in the line wins over its style's alignment.
-            top: overrideIsTop(raw) ?? topStyles.get(field("style").replace(/^\*/, "")) ?? false,
-        })
+        const cue = assDialogueCue(field("text"), parseTimestamp(field("start")), parseTimestamp(field("end")), field("style"), topStyles)
+        if (cue) cues.push(cue)
     }
 
     return cues.sort((a, b) => a.start - b.start)

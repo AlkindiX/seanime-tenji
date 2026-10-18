@@ -141,6 +141,8 @@ export function useMpvPlayer() {
         if (playbackPlan.maxVideoHeight) videoSource.maxVideoHeight = playbackPlan.maxVideoHeight
         if (playbackPlan.chapters?.length) videoSource.chapters = playbackPlan.chapters
         if (playbackPlan.mediaInfoSummary) videoSource.mediaInfoSummary = playbackPlan.mediaInfoSummary
+        if (playbackPlan.streamedSubtitles) videoSource.streamedSubtitles = playbackPlan.streamedSubtitles
+        if (playbackPlan.onMediaEvent) videoSource.onMediaEvent = playbackPlan.onMediaEvent
         return videoSource
     }, [playbackPlan, source])
     const shouldAutoplay = videoSource?.autoplay ?? true

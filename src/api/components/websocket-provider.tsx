@@ -1,7 +1,7 @@
 import { addClientQueryParams, getClientIdentity, saveClientIdentityFromEvent } from "@/api/client/client-identity"
 import { getServerBaseUrl } from "@/api/client/server-url"
 import { useWebsocketEventRouter } from "@/api/components/websocket-event-router"
-import { publishWsMessage, type WebsocketMessage } from "@/api/components/websocket-hub"
+import { publishWsMessage, setWsSender, type WebsocketMessage } from "@/api/components/websocket-hub"
 import { useServerAuthToken, useServerUrl, useServerUrlProtocol } from "@/atoms/server.atoms"
 import { degradeServerReachability, markServerReachable } from "@/lib/connection-state"
 import { manualOfflineModeAtom } from "@/lib/offline/manual-offline-mode"
@@ -16,6 +16,8 @@ const log = logger("websocket-provider")
 
 export const websocketConnectedAtom = atom(false)
 export const websocketConnectionStateAtom = atom<"idle" | "connecting" | "connected" | "disconnected">("idle")
+/** How the last connection ended, shown on the webOS settings screen for bug reports. */
+export const websocketLastCloseAtom = atom<{ code: number; reason: string } | null>(null)
 
 function parseMessage(data: unknown): WebsocketMessage | null {
     if (typeof data !== "string") return null
@@ -38,6 +40,7 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
     const manualOffline = useAtomValue(manualOfflineModeAtom)
     const [, setIsConnected] = useAtom(websocketConnectedAtom)
     const [, setConnectionState] = useAtom(websocketConnectionStateAtom)
+    const [, setLastClose] = useAtom(websocketLastCloseAtom)
 
     useWebsocketEventRouter()
 
@@ -79,6 +82,7 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
                 if (cancelled || socket !== nextSocket) return
                 log.info("WebSocket connection opened")
                 retryCount = 0
+                setWsSender(message => nextSocket.send(JSON.stringify(message)))
                 setIsConnected(true)
                 setConnectionState("connected")
                 markServerReachable()
@@ -103,10 +107,13 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
                 }
             })
 
-            nextSocket.addEventListener("close", () => {
+            nextSocket.addEventListener("close", (event) => {
                 if (cancelled || socket !== nextSocket) return
+                log.warning("WebSocket closed", { code: event.code, reason: event.reason })
+                setLastClose({ code: event.code, reason: event.reason })
 
                 socket = null
+                setWsSender(null)
                 setIsConnected(false)
                 setConnectionState("disconnected")
                 degradeServerReachability()
@@ -132,9 +139,10 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
             cancelled = true
             clearRetry()
             appStateSub.remove()
+            setWsSender(null)
             socket?.close()
         }
-    }, [manualOffline, serverAuthToken, serverUrl, serverUrlProtocol, setConnectionState, setIsConnected])
+    }, [manualOffline, serverAuthToken, serverUrl, serverUrlProtocol, setConnectionState, setIsConnected, setLastClose])
 
     return children
 }

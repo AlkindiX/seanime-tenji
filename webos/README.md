@@ -91,8 +91,13 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   - Audio the browser says it can't play (e.g. DTS, TrueHD, sometimes Opus or FLAC) only
     gives a warning: the TV's file player often plays what its MSE check refuses.
   - Torrent, debrid and online streams play as they are; the server can't transcode
-    them. When the TV can't decode one, the error says so. When the server answers with
-    an HTTP error instead (an expired link, a missing file), the error gives the status.
+    them. When the TV can't decode one, the error says so and names the file's codecs.
+    When the server answers with an HTTP error instead (an expired link, a missing file),
+    the error gives the status.
+  - A file that hasn't started after 45 seconds counts as one the TV can't play. LG's
+    player can wait forever without an error, notably on audio it doesn't play inside a
+    video file: FLAC, Vorbis, TrueHD, and DTS on many models. Tenji warns when a torrent or
+    debrid stream has such audio; pick a release with AAC or AC-3 audio instead.
 - **Playback stats** (Info key) show the mode (`html5 · direct play`, or
   `html5+hls.js · transcode`), the file's codecs, why it is transcoded, and the TV model.
 - **Chapters** of library files come from the server, so the seek bar shows them (and the
@@ -111,18 +116,27 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   a TV*: desktop Chromium plays the `<source>` but ignores the option, so the checks covered
   passing the position, the seek that follows and the fallback, not the speed-up.
 - **Audio tracks** can be switched when the TV exposes them, which webOS does.
-- **Subtitles** are drawn by the app: SRT, WebVTT and ASS dialogue lines. ASS styling and
-  positioned typesetting (signs) are not rendered.
+- **Subtitles** are drawn by the app: SRT, WebVTT and ASS dialogue lines, with ASS lines
+  meant for the top of the screen drawn there. ASS styling and positioned typesetting
+  (signs placed with `\pos`) are not rendered.
   - For library files, embedded tracks are extracted by the server. This needs its
     media streaming module and FFmpeg on the server.
-  - Embedded subtitles in torrent and debrid streams are not available.
+  - **Torrent and debrid streams** use the server's *direct stream*, the same mode the
+    Seanime web player uses: the server serves the file with a type the TV accepts and
+    reads its subtitle lines as it goes, sending them over the websocket once the player
+    has loaded the file, and again from the new position after a seek. All embedded text
+    tracks are listed from the start; their lines fill in as the episode plays.
 - **Not available:** downloads and offline mode (as on the other TV builds), external
   players, picture-in-picture, audio delay.
 - **Online streams** that require a `Referer` header can't send it from a browser.
 
 ## About this TV
 
-On webOS, Settings shows the model, webOS version (the platform version the TV reports,
+On webOS, Settings shows *Live updates*, the state of the websocket to the server, with how
+the last connection closed. Torrent and debrid streams are started and followed over it,
+so without it they can't start; Tenji then says so instead of waiting.
+
+Settings also shows the model, webOS version (the platform version the TV reports,
 e.g. 6.3.0), panel resolution, HDR10 and Dolby Vision support, and which notable video
 formats the browser says it decodes, which helps with bug reports. The same facts feed the playback
 decision above (4K files on a Full HD panel, Dolby Vision). They come from

@@ -10,7 +10,7 @@ import type {
     Onlinestream_VideoSource,
 } from "@/api/generated/types"
 import type { ServerLocalIdentity } from "@/lib/offline/server-local-store"
-import type { MpvChapter, MpvExternalSubtitle, MpvMediaInfoSummary } from "expo-mpv-player"
+import type { MpvChapter, MpvExternalSubtitle, MpvMediaEvent, MpvMediaInfoSummary, MpvStreamedSubtitles } from "expo-mpv-player"
 
 ///////////////////////////////////////////////////////////////////////////////
 // Mobile playback source
@@ -87,10 +87,11 @@ export type MobilePlaybackSource = {
     /** Server base selected by the loopback/configured-address resolver. */
     serverLocalServerUrl?: string
 
-    /**
-     * unused
-     */
+    /** Stream type of a Seanime direct stream ("torrent", "debrid"…), web build only. */
     serverStreamType?: NativePlayer_StreamType
+
+    /** Playback id of a Seanime direct stream (web build), which reports the player's events to the server. */
+    directStreamPlaybackId?: string
 
     /** MKV metadata parsed by the backend (chapters, fonts, subtitle tracks). */
     mkvMetadata?: MKVParser_Metadata
@@ -135,6 +136,9 @@ export type WebPlaybackPlan = {
     maxVideoHeight?: number
     chapters?: MpvChapter[]
     mediaInfoSummary?: MpvMediaInfoSummary
+    /** Subtitle lines a Seanime direct stream sends while playing, and where its player events go. */
+    streamedSubtitles?: MpvStreamedSubtitles
+    onMediaEvent?: (event: MpvMediaEvent) => void
     /**
      * Called when the player reports an error. `true`: handled, a new plan
      * is on its way. A string: the message to show instead. `null`: nothing

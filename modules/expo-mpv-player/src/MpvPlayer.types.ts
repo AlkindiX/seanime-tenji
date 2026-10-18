@@ -46,6 +46,43 @@ export type MpvVideoSource = {
     chapters?: MpvChapter[]
     /** How the source was chosen, shown with the technical info. */
     mediaInfoSummary?: MpvMediaInfoSummary
+    /** Subtitle tracks whose lines arrive during playback (Seanime's direct stream reads them from the file as it serves it). */
+    streamedSubtitles?: MpvStreamedSubtitles
+    /** Media element events, for a server that follows playback (Seanime's direct stream). */
+    onMediaEvent?: (event: MpvMediaEvent) => void
+}
+
+export type MpvStreamedSubtitleTrack = {
+    /** The track's own number; lines refer to it. */
+    number: number
+    title?: string
+    lang?: string
+    codec?: string
+    /** ASS header ([Script Info], [V4+ Styles]) for the style alignments. */
+    header?: string
+}
+
+export type MpvStreamedSubtitleLine = {
+    trackNumber: number
+    /** Seconds. */
+    start: number
+    end: number
+    /** ASS dialogue text, override tags included. */
+    text: string
+    style?: string
+}
+
+export type MpvStreamedSubtitles = {
+    tracks: MpvStreamedSubtitleTrack[]
+    /** Lines seen before subscribing are delivered first. Returns the unsubscribe function. */
+    subscribe: (listener: (lines: MpvStreamedSubtitleLine[]) => void) => () => void
+}
+
+export type MpvMediaEvent = {
+    type: "loadedmetadata" | "seeked" | "pause" | "play" | "ended" | "status"
+    currentTime: number
+    duration: number
+    paused: boolean
 }
 
 export type MpvMediaInfoSummary = {

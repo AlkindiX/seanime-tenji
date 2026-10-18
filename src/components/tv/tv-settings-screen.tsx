@@ -1,3 +1,4 @@
+import { websocketConnectionStateAtom, websocketLastCloseAtom } from "@/api/components/websocket-provider"
 import { useCurrentUser, useServerUrl } from "@/atoms/server.atoms"
 import { TVConfirmDrawer } from "@/components/tv/tv-confirm-drawer"
 import { usePreferredFocus, useTVFocus } from "@/components/tv/tv-focus"
@@ -9,6 +10,7 @@ import { useDeviceSummary } from "@/lib/webos/use-device-summary"
 import Ionicons from "@expo/vector-icons/Ionicons"
 import { Image } from "expo-image"
 import { router } from "expo-router"
+import { useAtomValue } from "jotai"
 import * as React from "react"
 import { ActivityIndicator, Animated, Platform, Pressable, ScrollView, Text, View } from "react-native"
 
@@ -184,6 +186,12 @@ export function TVSettingsScreen() {
     const [checkingOta, setCheckingOta] = React.useState(false)
     const version = React.useMemo(() => getOtaVersionInfo(), [])
     const deviceSummary = useDeviceSummary()
+    const socketState = useAtomValue(websocketConnectionStateAtom)
+    const socketLastClose = useAtomValue(websocketLastCloseAtom)
+    // Torrent and debrid streams are started and followed over the websocket.
+    const liveUpdatesDetail = socketState === "connected"
+        ? "Connected"
+        : `Not connected${socketLastClose ? ` (closed with code ${socketLastClose.code}${socketLastClose.reason ? `: ${socketLastClose.reason}` : ""})` : ""}. Torrent and debrid streams need it.`
     const cacheRef = React.useRef<RowRef>(null)
     const serverRef = React.useRef<RowRef>(null)
 
@@ -351,6 +359,14 @@ export function TVSettingsScreen() {
                                 label="This TV"
                                 detail={deviceSummary.device}
                                 icon="tv-outline"
+                                onPress={noop}
+                                showChevron={false}
+                            />
+                            <Divider />
+                            <SettingsRow
+                                label="Live updates"
+                                detail={liveUpdatesDetail}
+                                icon="pulse-outline"
                                 onPress={noop}
                                 showChevron={false}
                             />
