@@ -120,7 +120,7 @@ export function useMpvPlayer() {
         if (!source || !playbackPlan) return undefined
 
         const prefs = getPlayerPreferences()
-        const externalSubtitles = source.externalSubtitles?.map(s => ({
+        const externalSubtitles = playbackPlan.sourceSubtitles ?? source.externalSubtitles?.map(s => ({
             url: s.url,
             title: s.language || undefined,
         }))

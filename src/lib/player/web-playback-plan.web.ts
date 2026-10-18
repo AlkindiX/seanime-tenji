@@ -1,9 +1,11 @@
 import { getClientIdentity } from "@/api/client/client-identity"
 import { buildSeaQuery } from "@/api/client/requests"
 import { appendServerHMACToken, getServerAuthHeaders } from "@/api/client/server-auth"
+import { getServerBaseUrl } from "@/api/client/server-url"
 import { API_ENDPOINTS } from "@/api/generated/endpoints"
 import { useGetContinuityWatchHistory } from "@/api/hooks/continuity.hooks"
 import type { MediaInfo, Mediastream_MediaContainer, Models_MediastreamSettings } from "@/api/generated/types"
+import { useServerUrl } from "@/atoms/server.atoms"
 import { logger } from "@/lib/utils/logger"
 import { toast } from "@/lib/utils/toast"
 import { describeDevice, getDeviceInfo } from "@/lib/webos/device-info"
@@ -18,6 +20,7 @@ import {
 import type { MpvChapter, MpvExternalSubtitle } from "expo-mpv-player"
 import React from "react"
 import { createDirectStreamSession, describeStreamCodecs, type DirectStreamSession, directStreamChapters } from "./direct-stream"
+import { proxiedUrl } from "./online-proxy"
 import { getWatchHistoryResumePosition } from "./resume-position"
 import type { MobilePlaybackSource, WebPlaybackPlan } from "./types"
 
@@ -248,6 +251,7 @@ export function useWebPlaybackPlan(source: MobilePlaybackSource | null): WebPlay
     const [fallback, setFallback] = React.useState<{ id: string; position?: number } | null>(null)
     const { data: watchHistory } = useGetContinuityWatchHistory()
     const directStream = useDirectStreamSession(source)
+    const serverUrl = useServerUrl()
     const library = isLibraryFile(source)
     const streamIsHls = source?.streamKind === "hls"
     const forceTranscode = !!source && fallback?.id === source.id
@@ -328,11 +332,31 @@ export function useWebPlaybackPlan(source: MobilePlaybackSource | null): WebPlay
                 onPlaybackError,
             }
         }
+        if (source.continuityKind === "onlinestream" && serverUrl) {
+            // Through the server's proxy: the extension's host would refuse the TV directly.
+            const server = getServerBaseUrl(serverUrl)
+            const proxy = (url: string) => proxiedUrl(server, url, source.headers, appendServerHMACToken)
+            return {
+                url: proxy(source.url),
+                // Sent by the proxy; an empty object keeps the player from using the source's own.
+                headers: {},
+                isHls: streamIsHls,
+                // hls.js: the TV's own HLS player is the one webOS 26 reportedly refuses.
+                preferMse: streamIsHls,
+                externalSubtitles: NO_SUBTITLES,
+                sourceSubtitles: (source.externalSubtitles ?? []).map(subtitle => ({
+                    url: proxy(subtitle.url),
+                    title: subtitle.language || undefined,
+                    lang: subtitle.language || undefined,
+                })),
+                onPlaybackError,
+            }
+        }
         if (!library) {
             // The player would otherwise guess from the URL, and online HLS links may lack ".m3u8".
             return { externalSubtitles: NO_SUBTITLES, isHls: streamIsHls, onPlaybackError }
         }
         if (!current) return undefined
         return { ...current.plan, onPlaybackError }
-    }, [current, directStream, library, onPlaybackError, source, streamIsHls])
+    }, [current, directStream, library, onPlaybackError, serverUrl, source, streamIsHls])
 }

@@ -14,7 +14,7 @@ export function toSourceFromOnlineStream(params: {
 }): MobilePlaybackSource {
     const { videoSource, mediaId, episodeNumber, media, episode, entryListData } = params
 
-    const isHls = videoSource.type === "m3u8" || videoSource.url.endsWith(".m3u8")
+    const isHls = videoSource.type === "m3u8" || /\.m3u8($|[?#])/i.test(videoSource.url)
     const streamKind: MobileStreamKind = isHls ? "hls" : "http"
     const sourceIndex = params.videoSources?.findIndex(source => (
         source.url === videoSource.url

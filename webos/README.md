@@ -128,7 +128,12 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
     tracks are listed from the start; their lines fill in as the episode plays.
 - **Not available:** downloads and offline mode (as on the other TV builds), external
   players, picture-in-picture, audio delay.
-- **Online streams** that require a `Referer` header can't send it from a browser.
+- **Online streams** go through the Seanime server's proxy (`/api/v1/proxy`, the one the
+  Seanime web player uses), video and subtitle files alike. A packaged webOS app can't
+  send the `Referer` many hosts require, and most hosts don't answer its CORS requests;
+  the proxy adds the source's headers and rewrites HLS playlists so every segment goes
+  through it too. HLS plays through hls.js. The proxy follows the server's security mode:
+  in strict mode it won't fetch from private-network addresses.
 
 ## About this TV
 

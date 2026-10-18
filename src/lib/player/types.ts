@@ -124,6 +124,8 @@ export type MobilePlaybackSource = {
 export type WebPlaybackPlan = {
     /** Subtitle tracks the server extracted from the file. */
     externalSubtitles: MpvExternalSubtitle[]
+    /** Replaces the source's own subtitle files, e.g. with their URLs through the server's proxy. */
+    sourceSubtitles?: MpvExternalSubtitle[]
     /** Replaces the source URL and headers, e.g. with the server's HLS transcode. */
     url?: string
     headers?: Record<string, string>
