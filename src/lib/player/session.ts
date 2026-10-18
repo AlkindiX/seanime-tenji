@@ -14,18 +14,22 @@ import type {
 import { usePlaybackCancelManualTracking } from "@/api/hooks/playback_manager.hooks"
 import { useServerUrl } from "@/atoms/server.atoms"
 import { logger } from "@/lib/utils/logger"
+import { toast } from "@/lib/utils/toast"
 import { useQueryClient } from "@tanstack/react-query"
 import { useRouter } from "expo-router"
 import { atom, useAtom } from "jotai"
 import { useAtomValue } from "jotai/react"
 import React from "react"
 import { Platform } from "react-native"
-import { NATIVE_PLAYER_EVENT, type NativePlayerServerEvent, parseNativePlayerEvent } from "./direct-stream"
+import { MPVCORE_EVENT, NATIVE_PLAYER_EVENT, type NativePlayerServerEvent, parseNativePlayerEvent } from "./direct-stream"
 import { openExternalPlayerURL } from "./external-players"
 import { getPlayerPreferences } from "./player-preferences"
 import type { AnimeEntryLaunchView, MobilePlaybackSource, PlayerNextEpisodeAction } from "./types"
 
 export const currentPlaybackSourceAtom = atom<MobilePlaybackSource | null>(null)
+
+/** How long after a new start a torrent "stopped" is taken to be about the previous stream. */
+const STOPPED_GRACE_MS = 15_000
 
 const log = logger("player-session")
 
@@ -457,8 +461,11 @@ export function usePlayerEventListener() {
     const lastStreamStateLogRef = React.useRef<string | null>(null)
     const pendingInfo = useAtomValue(torrentStreamPendingInfoAtom)
     const streamSessionMode = useAtomValue(streamSessionModeAtom)
+    /** When the pending start was set, to tell a "stopped" for the previous stream from one for it. */
+    const pendingSinceRef = React.useRef(0)
     React.useEffect(() => {
         pendingInfoRef.current = pendingInfo
+        if (pendingInfo) pendingSinceRef.current = Date.now()
     }, [pendingInfo])
     React.useEffect(() => {
         streamSessionModeRef.current = streamSessionMode
@@ -522,7 +529,8 @@ export function usePlayerEventListener() {
                 extra?: Partial<MobilePlaybackSource>,
             ) => {
                 const pending = pendingInfoRef.current
-                const streamPrefix = pending?.streamMode === "debrid" ? "debridstream" : "torrentstream"
+                const streamMode = extra?.serverStreamType ?? pending?.streamMode
+                const streamPrefix = streamMode === "debrid" ? "debridstream" : "torrentstream"
 
                 const hydrated = resolvePlaybackMetadataFromCache(
                     queryClient,
@@ -643,10 +651,15 @@ export function usePlayerEventListener() {
                         }
                         resetTorrentStreamState()
                         return
-                    case "error":
+                    case "error": {
                         log.error("Direct stream error", event.payload)
-                        setError(event.payload?.error || "The stream failed")
+                        const message = event.payload?.error || "The stream failed"
+                        setError(message)
+                        // Debrid sends nothing after this, so the entry would keep "preparing".
+                        resetTorrentStreamState()
+                        toast.error(message)
                         return
+                    }
                     default:
                         return
                 }
@@ -731,6 +744,9 @@ export function usePlayerEventListener() {
 
                         case "stopped":
                             logStreamState("torrent", payload.state)
+                            // Leaving the player stops the old stream as the next episode starts;
+                            // that late "stopped" must not wipe the new start.
+                            if (pendingInfoRef.current && Date.now() - pendingSinceRef.current < STOPPED_GRACE_MS) return
                             resetTorrentStreamState()
                             return
 
@@ -812,6 +828,15 @@ export function usePlayerEventListener() {
 
                 if (message.type === NATIVE_PLAYER_EVENT && Platform.OS === "web") {
                     handleNativePlayerEvent(parseNativePlayerEvent(message.payload))
+                }
+
+                // With MpvPrism on, the server streams to its mpv player instead, which the TV can't follow.
+                if (message.type === MPVCORE_EVENT && Platform.OS === "web") {
+                    const event = parseNativePlayerEvent(message.payload)
+                    if (event?.type !== "open-and-await" || !pendingInfoRef.current) return
+                    log.error("The server streams to MpvPrism, which this TV can't play")
+                    toast.error("The Seanime server has MpvPrism turned on, so streams go to mpv. Turn it off in the server's media player settings to stream on this TV.")
+                    resetTorrentStreamState()
                 }
             }
 

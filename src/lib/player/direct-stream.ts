@@ -23,6 +23,8 @@ export { describeStreamCodecs, type StreamCodecs } from "./direct-stream-format"
 const log = logger("direct-stream")
 
 export const NATIVE_PLAYER_EVENT = "native-player"
+/** Sent instead of NATIVE_PLAYER_EVENT when the server plays streams with MpvPrism. */
+export const MPVCORE_EVENT = "mpvcore"
 const VIDEOCORE_EVENT = "videocore"
 
 /** The playback type to ask the server for when starting a torrent or debrid stream. */
@@ -128,6 +130,11 @@ export function createDirectStreamSession(source: MobilePlaybackSource): DirectS
         })
     }
 
+    // Right away, not with the first media event: the server handles each client
+    // event on its own goroutine, and metadata reported before "video-loaded"
+    // would be dropped (and with it the subtitle stream).
+    reportLoaded()
+
     return {
         streamedSubtitles: {
             tracks,
@@ -139,7 +146,6 @@ export function createDirectStreamSession(source: MobilePlaybackSource): DirectS
         },
         onMediaEvent: (event) => {
             if (terminated) return
-            reportLoaded()
             const payload = { currentTime: event.currentTime, duration: event.duration, paused: event.paused }
             send(MEDIA_EVENTS[event.type], event.type === "ended" ? { autoNext: false } : payload)
         },
