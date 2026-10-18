@@ -62,6 +62,15 @@ const MEDIA_EVENTS: Record<MpvMediaEvent["type"], string> = {
     status: "video-status",
 }
 
+/** Tells the server a direct stream's player is gone (or never opened), which ends the stream. */
+export function terminateDirectStream(playbackId: string, playbackType: string) {
+    const { clientId } = getClientIdentity()
+    sendWsMessage({
+        type: VIDEOCORE_EVENT,
+        payload: { clientId, type: "video-terminated", payload: { id: playbackId, clientId, playerType: "native", playbackType } },
+    })
+}
+
 export type DirectStreamSession = {
     streamedSubtitles: MpvStreamedSubtitles
     onMediaEvent: (event: MpvMediaEvent) => void
@@ -154,7 +163,7 @@ export function createDirectStreamSession(source: MobilePlaybackSource): DirectS
             terminated = true
             unsubscribe()
             listeners.clear()
-            send("video-terminated", { id: playbackId, clientId, playerType: "native", playbackType })
+            terminateDirectStream(playbackId, playbackType)
         },
     }
 }

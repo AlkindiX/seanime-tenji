@@ -26,6 +26,7 @@ import { streamPlaybackType } from "@/lib/player/direct-stream"
 import {
     activeStreamSessionAtom,
     debridStreamStateAtom,
+    directStreamLoadingMessageAtom,
     streamSessionModeAtom,
     torrentStreamIsPreparingAtom,
     torrentStreamLoadingStateAtom,
@@ -34,7 +35,7 @@ import {
 import { logger } from "@/lib/utils/logger"
 import { toast } from "@/lib/utils/toast"
 import { useAtom } from "jotai"
-import { useAtomValue } from "jotai/react"
+import { useAtomValue, useSetAtom } from "jotai/react"
 import * as React from "react"
 import { Platform } from "react-native"
 import {
@@ -365,14 +366,16 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
         episodeSelectionLockedRef.current = isEpisodeSelectionLocked
     }, [isEpisodeSelectionLocked])
 
+    const setDirectStreamLoadingMessage = useSetAtom(directStreamLoadingMessageAtom)
     const clearPendingStreamState = React.useCallback(() => {
+        setDirectStreamLoadingMessage(null)
         setPendingInfo(null)
         setStreamSessionMode(null)
         setIsPreparing(false)
         setLoadingState(null)
         setDebridStreamState(null)
         setActiveStreamSession(null)
-    }, [setActiveStreamSession, setDebridStreamState, setIsPreparing, setLoadingState, setPendingInfo, setStreamSessionMode])
+    }, [setActiveStreamSession, setDebridStreamState, setDirectStreamLoadingMessage, setIsPreparing, setLoadingState, setPendingInfo, setStreamSessionMode])
 
     const resetPicker = React.useCallback(() => {
         setPickerOpen(false)

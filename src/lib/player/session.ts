@@ -21,7 +21,7 @@ import { atom, useAtom } from "jotai"
 import { useAtomValue } from "jotai/react"
 import React from "react"
 import { Platform } from "react-native"
-import { MPVCORE_EVENT, NATIVE_PLAYER_EVENT, type NativePlayerServerEvent, parseNativePlayerEvent } from "./direct-stream"
+import { MPVCORE_EVENT, NATIVE_PLAYER_EVENT, type NativePlayerServerEvent, parseNativePlayerEvent, terminateDirectStream } from "./direct-stream"
 import { openExternalPlayerURL } from "./external-players"
 import { getPlayerPreferences } from "./player-preferences"
 import type { AnimeEntryLaunchView, MobilePlaybackSource, PlayerNextEpisodeAction } from "./types"
@@ -196,6 +196,8 @@ export const activeStreamSessionAtom = atom<ActiveStreamSession | null>(null)
 
 /** True while the server is preparing the torrent stream (after start -> before URL is ready). */
 export const torrentStreamIsPreparingAtom = atom(false)
+/** The server's own loading step for a direct stream (web build), e.g. "Downloading metadata...". */
+export const directStreamLoadingMessageAtom = atom<string | null>(null)
 
 export type TorrentStreamLoadingState =
     | "LOADING"
@@ -451,6 +453,7 @@ export function usePlayerEventListener() {
     const [, setTorrentIsLoaded] = useAtom(torrentStreamIsLoadedAtom)
     const [, setDebridStreamState] = useAtom(debridStreamStateAtom)
     const [, setActiveStreamSession] = useAtom(activeStreamSessionAtom)
+    const [, setDirectStreamLoadingMessage] = useAtom(directStreamLoadingMessageAtom)
 
     const { mutate: cancelManualTracking } = usePlaybackCancelManualTracking({})
 
@@ -520,6 +523,7 @@ export function usePlayerEventListener() {
                 setTorrentIsLoaded(false)
                 setDebridStreamState(null)
                 setActiveStreamSession(null)
+                setDirectStreamLoadingMessage(null)
             }
 
             /** Opens the player on a stream the server says is ready (external player link or direct stream). */
@@ -617,6 +621,7 @@ export function usePlayerEventListener() {
                 switch (event.type) {
                     case "open-and-await":
                         if (typeof event.payload === "string" && event.payload) {
+                            setDirectStreamLoadingMessage(event.payload)
                             setActiveStreamSession(current => updateActiveStreamSession(current, pendingInfoRef.current, mode, {
                                 status: "preparing",
                                 message: event.payload,
@@ -625,6 +630,13 @@ export function usePlayerEventListener() {
                         return
                     case "watch": {
                         const info = event.payload
+                        setDirectStreamLoadingMessage(null)
+                        // Cancelled while the server was still loading it: don't open the player.
+                        if (!pendingInfoRef.current && !streamSessionModeRef.current) {
+                            log.info("Ignoring a direct stream that was cancelled while loading", info?.id)
+                            if (info?.id) terminateDirectStream(info.id, info.streamType)
+                            return
+                        }
                         const mediaId = info?.media?.id ?? pendingInfoRef.current?.mediaId
                         const episodeNumber = info?.episode?.episodeNumber ?? pendingInfoRef.current?.episodeNumber
                         if (!info?.streamUrl || typeof mediaId !== "number" || typeof episodeNumber !== "number") {
