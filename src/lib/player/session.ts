@@ -631,8 +631,10 @@ export function usePlayerEventListener() {
                     case "watch": {
                         const info = event.payload
                         setDirectStreamLoadingMessage(null)
-                        // Cancelled while the server was still loading it: don't open the player.
-                        if (!pendingInfoRef.current && !streamSessionModeRef.current) {
+                        // Every start from this app sets the pending info, and opening or
+                        // cancelling clears it: without one, this stream was cancelled while
+                        // the server was still loading it, so don't open the player.
+                        if (!pendingInfoRef.current) {
                             log.info("Ignoring a direct stream that was cancelled while loading", info?.id)
                             if (info?.id) terminateDirectStream(info.id, info.streamType)
                             return
