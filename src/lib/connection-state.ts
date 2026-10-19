@@ -1,6 +1,8 @@
 import NetInfo, { type NetInfoState } from "@react-native-community/netinfo"
 import { onlineManager } from "@tanstack/react-query"
 import { useEffect } from "react"
+import { AppState, Platform } from "react-native"
+import { logger } from "./utils/logger"
 import { getStoredManualOfflineMode } from "./offline/manual-offline-mode"
 
 export type ServerReachability = "unknown" | "reachable" | "unreachable"
@@ -16,6 +18,15 @@ let snapshot: ConnectionSnapshot = {
 }
 
 const listeners = new Set<() => void>()
+const log = logger("connection-state")
+
+export type ConnectionChange = {
+    source: string
+    at: number
+}
+
+// what moved the snapshot last, shown in TV settings and the logs
+let lastChange: ConnectionChange | null = null
 
 function syncOnlineManager(): void {
     onlineManager.setOnline(snapshot.hasNetwork && !getStoredManualOfflineMode())
@@ -25,7 +36,7 @@ function emitChange(): void {
     listeners.forEach(listener => listener())
 }
 
-function updateSnapshot(updater: (current: ConnectionSnapshot) => ConnectionSnapshot): void {
+function updateSnapshot(source: string, updater: (current: ConnectionSnapshot) => ConnectionSnapshot): void {
     const next = updater(snapshot)
 
     if (
@@ -35,7 +46,13 @@ function updateSnapshot(updater: (current: ConnectionSnapshot) => ConnectionSnap
         return
     }
 
+    log.info(
+        `network ${snapshot.hasNetwork ? "up" : "down"} -> ${next.hasNetwork ? "up" : "down"}, `
+        + `server ${snapshot.serverReachability} -> ${next.serverReachability}`,
+        { source, manualOffline: getStoredManualOfflineMode() },
+    )
     snapshot = next
+    lastChange = { source, at: Date.now() }
     syncOnlineManager()
     emitChange()
 }
@@ -44,9 +61,21 @@ function hasDeviceNetwork(state: NetInfoState): boolean {
     return state.isConnected !== false
 }
 
+let lastNetInfoLog = ""
+
 function applyNetInfoState(state: NetInfoState): void {
+    const summary = JSON.stringify({
+        type: state.type,
+        isConnected: state.isConnected,
+        isInternetReachable: state.isInternetReachable,
+    })
+    if (summary !== lastNetInfoLog) {
+        lastNetInfoLog = summary
+        log.debug("NetInfo", summary)
+    }
+
     const nextHasNetwork = hasDeviceNetwork(state)
-    setDeviceNetworkState(nextHasNetwork)
+    setDeviceNetworkState(nextHasNetwork, `netinfo ${state.type}`)
 }
 
 syncOnlineManager()
@@ -62,8 +91,12 @@ export function getConnectionSnapshot(): ConnectionSnapshot {
     return snapshot
 }
 
-export function setDeviceNetworkState(hasNetwork: boolean): void {
-    updateSnapshot(current => {
+export function getLastConnectionChange(): ConnectionChange | null {
+    return lastChange
+}
+
+export function setDeviceNetworkState(hasNetwork: boolean, source = "device network"): void {
+    updateSnapshot(source, current => {
         if (!hasNetwork) {
             return {
                 hasNetwork: false,
@@ -78,8 +111,8 @@ export function setDeviceNetworkState(hasNetwork: boolean): void {
     })
 }
 
-export function degradeServerReachability(): void {
-    updateSnapshot(current => {
+export function degradeServerReachability(source: string): void {
+    updateSnapshot(source, current => {
         if (!current.hasNetwork || current.serverReachability !== "reachable") {
             return current
         }
@@ -91,8 +124,8 @@ export function degradeServerReachability(): void {
     })
 }
 
-export function markServerReachable(): void {
-    updateSnapshot(current => {
+export function markServerReachable(source: string): void {
+    updateSnapshot(source, current => {
         if (current.serverReachability === "reachable") {
             return current
         }
@@ -104,8 +137,8 @@ export function markServerReachable(): void {
     })
 }
 
-export function markServerUnreachable(): void {
-    updateSnapshot(current => {
+export function markServerUnreachable(source: string): void {
+    updateSnapshot(source, current => {
         if (!current.hasNetwork || current.serverReachability === "unreachable") {
             return current
         }
@@ -145,12 +178,38 @@ export function useConnectionStateMonitor(): void {
 
         NetInfo.fetch()
             .then(handleState)
-            .catch(() => {
+            .catch(error => {
+                log.warning("NetInfo.fetch failed", error)
             })
+
+        // suspends and resumes explain most dropped connections on TVs
+        const appStateSub = AppState.addEventListener("change", state => {
+            log.info(`app state ${state}`, {
+                server: snapshot.serverReachability,
+                network: snapshot.hasNetwork,
+            })
+        })
+
+        const doc = Platform.OS === "web"
+            ? (globalThis as { document?: Document }).document
+            : undefined
+        const onVisibility = () => log.info(`document ${doc?.visibilityState}`)
+        const onRelaunch = () => log.info("webOS relaunch")
+        const onOnline = () => log.info("browser online")
+        const onOffline = () => log.info("browser offline")
+        doc?.addEventListener("visibilitychange", onVisibility)
+        doc?.addEventListener("webOSRelaunch", onRelaunch)
+        globalThis.addEventListener?.("online", onOnline)
+        globalThis.addEventListener?.("offline", onOffline)
 
         return () => {
             mounted = false
             unsubscribe()
+            appStateSub.remove()
+            doc?.removeEventListener("visibilitychange", onVisibility)
+            doc?.removeEventListener("webOSRelaunch", onRelaunch)
+            globalThis.removeEventListener?.("online", onOnline)
+            globalThis.removeEventListener?.("offline", onOffline)
         }
     }, [])
 }

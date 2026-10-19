@@ -43,6 +43,7 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
 
     React.useEffect(() => {
         if (!serverUrl || manualOffline) {
+            log.info("WebSocket not started", { hasServerUrl: Boolean(serverUrl), manualOffline })
             setIsConnected(false)
             setConnectionState(manualOffline ? "disconnected" : "idle")
             return
@@ -52,6 +53,7 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
         let cancelled = false
         let retryCount = 0
         let retryTimer: ReturnType<typeof setTimeout> | null = null
+        let socketCount = 0
 
         const clearRetry = () => {
             if (!retryTimer) return
@@ -71,17 +73,45 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
 
             const scheme = serverUrlProtocol === "https:" ? "wss" : "ws"
             const url = `${scheme}://${getServerBaseUrl(serverUrl, true)}/events?${params.toString()}`
-            const nextSocket = new WebSocket(url)
+            const socketId = ++socketCount
+            const startedAt = Date.now()
+            let openedAt: number | null = null
+            let nextSocket: WebSocket
+            try {
+                nextSocket = new WebSocket(url)
+            }
+            catch (error) {
+                // a malformed URL throws here instead of firing "error"
+                log.error(`WebSocket #${socketId} could not be created`, url, error)
+                setConnectionState("disconnected")
+                return
+            }
             socket = nextSocket
-            log.info("Connecting to WebSocket", url)
+            log.info(`Connecting to WebSocket #${socketId}`, url, {
+                attempt: retryCount + 1,
+                hasToken: Boolean(serverAuthToken),
+            })
 
             nextSocket.addEventListener("open", () => {
                 if (cancelled || socket !== nextSocket) return
-                log.info("WebSocket connection opened")
+                openedAt = Date.now()
+                log.info(`WebSocket #${socketId} opened`, { afterMs: openedAt - startedAt })
                 retryCount = 0
                 setIsConnected(true)
                 setConnectionState("connected")
-                markServerReachable()
+                markServerReachable(`websocket #${socketId} open`)
+            })
+
+            nextSocket.addEventListener("error", event => {
+                // browsers give no detail here on purpose; the close code that follows says more
+                const message = (event as { message?: unknown }).message
+                log.warning(`WebSocket #${socketId} error`, {
+                    message: typeof message === "string" ? message : null,
+                    readyState: nextSocket.readyState,
+                    opened: openedAt !== null,
+                    afterMs: Date.now() - startedAt,
+                    current: socket === nextSocket && !cancelled,
+                })
             })
 
             nextSocket.addEventListener("message", event => {
@@ -103,13 +133,25 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
                 }
             })
 
-            nextSocket.addEventListener("close", () => {
-                if (cancelled || socket !== nextSocket) return
+            nextSocket.addEventListener("close", event => {
+                const closeInfo = {
+                    code: event.code,
+                    reason: event.reason || null,
+                    wasClean: event.wasClean,
+                    opened: openedAt !== null,
+                    openForMs: openedAt === null ? null : Date.now() - openedAt,
+                    afterMs: Date.now() - startedAt,
+                }
+                if (cancelled || socket !== nextSocket) {
+                    log.debug(`WebSocket #${socketId} closed (replaced or unmounted)`, closeInfo)
+                    return
+                }
+                log.warning(`WebSocket #${socketId} closed`, closeInfo)
 
                 socket = null
                 setIsConnected(false)
                 setConnectionState("disconnected")
-                degradeServerReachability()
+                degradeServerReachability(`websocket #${socketId} closed (code ${event.code})`)
 
                 retryCount += 1
                 const delay = retryCount === 1 ? 0 : Math.min(1500 * Math.pow(2, retryCount - 2), 30_000)
@@ -120,15 +162,21 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
 
         const appStateSub = AppState.addEventListener("change", state => {
             if (state !== "active") return
+            log.info("App active; WebSocket readyState", socket?.readyState ?? "none")
             if (!socket || socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) {
                 retryCount = 0
                 connect()
             }
         })
 
+        log.info("WebSocket effect started", {
+            protocol: serverUrlProtocol,
+            hasToken: Boolean(serverAuthToken),
+        })
         connect()
 
         return () => {
+            log.info("WebSocket effect stopped (server, token or offline mode changed)")
             cancelled = true
             clearRetry()
             appStateSub.remove()

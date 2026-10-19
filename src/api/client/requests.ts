@@ -123,8 +123,9 @@ export async function buildSeaQuery<T, D = unknown>(
 
     try {
         const response = await fetch(url.toString(), options)
-        markServerReachable()
+        markServerReachable(`${method} ${endpoint} -> ${response.status}`)
         saveClientIdentityFromHeaders(response.headers)
+        log.debug(`${method} ${endpoint} -> ${response.status}`, { durationMs: Date.now() - startedAt })
 
         const text = await response.text()
         let responseData: { data?: T; error?: string } | undefined
@@ -167,7 +168,7 @@ export async function buildSeaQuery<T, D = unknown>(
         const connectivityFailure = isConnectivityFailure(error, seaError)
 
         if (connectivityFailure) {
-            markServerUnreachable()
+            markServerUnreachable(`${method} ${endpoint} failed: ${seaError.error}`)
         }
 
         log.warning(`${method} ${endpoint} failed`, {

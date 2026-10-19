@@ -1,6 +1,7 @@
 import { getStoredJsonValue, getStoredString, removeStoredKey, setStoredString } from "@/atoms/storage"
+import { describeLogDevice, queueForDebugLogReceiver } from "@/lib/debug-log-receiver"
 import { ExpoOfflineLogger } from "expo-offline-logger"
-import { Platform } from "react-native"
+import { AppState, Platform } from "react-native"
 
 export type OfflineLogLevel = "debug" | "info" | "success" | "warning" | "error" | "fatal"
 
@@ -32,7 +33,8 @@ type GlobalWithErrorHooks = typeof globalThis & {
 
 const OFFLINE_LOGS_STORAGE_KEY = "sea-offline-log-entries"
 const OFFLINE_LOGGING_ENABLED_STORAGE_KEY = "sea-offline-logging-enabled"
-const MAX_OFFLINE_LOG_ENTRIES = 200
+const MAX_OFFLINE_LOG_ENTRIES = 1500
+const PERSIST_DELAY_MS = 750
 const MAX_DATA_ITEMS_PER_ENTRY = 5
 const MAX_DATA_ITEM_LENGTH = 500
 
@@ -46,6 +48,10 @@ const originalConsole = {
 
 let installed = false
 let consolePatched = false
+// entries live in memory and are written out shortly after the last append, so
+// debug logging doesn't re-serialize the whole log on every line
+let cachedEntries: OfflineLogEntry[] | null = null
+let persistTimer: ReturnType<typeof setTimeout> | null = null
 
 function consoleMethodForLevel(level: OfflineLogLevel): ConsoleMethod {
     if (level === "debug") return "debug"
@@ -133,26 +139,48 @@ function createOfflineLogEntry(level: OfflineLogLevel, scope: string, data: unkn
     }
 }
 
-function persistEntry(entry: OfflineLogEntry) {
+function loadEntries(): OfflineLogEntry[] {
+    if (!cachedEntries) {
+        cachedEntries = getStoredJsonValue<OfflineLogEntry[]>(OFFLINE_LOGS_STORAGE_KEY) ?? []
+    }
+    return cachedEntries
+}
+
+function writeEntries() {
+    if (persistTimer) {
+        clearTimeout(persistTimer)
+        persistTimer = null
+    }
+    if (!cachedEntries) return
+
     try {
-        const entries = getStoredJsonValue<OfflineLogEntry[]>(OFFLINE_LOGS_STORAGE_KEY) ?? []
-        entries.push(entry)
-
-        let nextEntries = entries.length > MAX_OFFLINE_LOG_ENTRIES
-            ? entries.slice(entries.length - MAX_OFFLINE_LOG_ENTRIES)
-            : entries
-
+        setStoredString(OFFLINE_LOGS_STORAGE_KEY, JSON.stringify(cachedEntries))
+    }
+    catch {
+        cachedEntries = cachedEntries.slice(-50)
         try {
-            setStoredString(OFFLINE_LOGS_STORAGE_KEY, JSON.stringify(nextEntries))
+            setStoredString(OFFLINE_LOGS_STORAGE_KEY, JSON.stringify(cachedEntries))
         }
         catch {
-            nextEntries = nextEntries.slice(-50)
-            try {
-                setStoredString(OFFLINE_LOGS_STORAGE_KEY, JSON.stringify(nextEntries))
-            }
-            catch {
-                removeStoredKey(OFFLINE_LOGS_STORAGE_KEY)
-            }
+            removeStoredKey(OFFLINE_LOGS_STORAGE_KEY)
+        }
+    }
+}
+
+function persistEntry(entry: OfflineLogEntry) {
+    try {
+        const entries = loadEntries()
+        entries.push(entry)
+        if (entries.length > MAX_OFFLINE_LOG_ENTRIES) {
+            entries.splice(0, entries.length - MAX_OFFLINE_LOG_ENTRIES)
+        }
+
+        // the app may not live long enough after a crash for a delayed write
+        if (entry.level === "fatal" || entry.level === "error") {
+            writeEntries()
+        }
+        else if (!persistTimer) {
+            persistTimer = setTimeout(writeEntries, PERSIST_DELAY_MS)
         }
     }
     catch {
@@ -162,6 +190,7 @@ function persistEntry(entry: OfflineLogEntry) {
 export function appendOfflineLog(level: OfflineLogLevel, scope: string, data: unknown[], native = false): OfflineLogEntry {
     const entry = createOfflineLogEntry(level, scope, data, native)
     persistEntry(entry)
+    queueForDebugLogReceiver(sanitizeEntryForExport(entry))
 
     try {
         if (native) {
@@ -191,16 +220,22 @@ export function isOfflineLoggingEnabled(): boolean {
 export function setOfflineLoggingEnabled(enabled: boolean) {
     if (enabled) {
         setStoredString(OFFLINE_LOGGING_ENABLED_STORAGE_KEY, "true")
-        appendOfflineLog("info", "offline-logger", ["logging enabled"])
+        appendOfflineLog("info", "offline-logger", ["logging enabled", describeLogDevice()])
         return
     }
 
     appendOfflineLog("info", "offline-logger", ["logging disabled"])
     removeStoredKey(OFFLINE_LOGGING_ENABLED_STORAGE_KEY)
+    writeEntries()
 }
 
 export function getOfflineLogEntries(): OfflineLogEntry[] {
-    return getStoredJsonValue<OfflineLogEntry[]>(OFFLINE_LOGS_STORAGE_KEY) ?? []
+    return [...loadEntries()]
+}
+
+/** Saved entries with tokens and home paths redacted, as they leave the device. */
+export function getOfflineLogEntriesForExport(): OfflineLogEntry[] {
+    return loadEntries().map(sanitizeEntryForExport)
 }
 
 export function getOfflineCrashEntries(): OfflineLogEntry[] {
@@ -208,6 +243,9 @@ export function getOfflineCrashEntries(): OfflineLogEntry[] {
 }
 
 export function clearOfflineLogs() {
+    if (persistTimer) clearTimeout(persistTimer)
+    persistTimer = null
+    cachedEntries = []
     removeStoredKey(OFFLINE_LOGS_STORAGE_KEY)
     ExpoOfflineLogger.clear()
     ExpoOfflineLogger.clearLastNativeCrash()
@@ -325,4 +363,17 @@ export function installOfflineLogger() {
     capturePreviousNativeCrash()
     patchConsole()
     installGlobalErrorHandler()
+
+    // write pending entries before the OS suspends or closes the app
+    try {
+        AppState.addEventListener("change", state => {
+            if (state !== "active") writeEntries()
+        })
+    }
+    catch {
+    }
+
+    if (isOfflineLoggingEnabled()) {
+        appendOfflineLog("info", "session", ["app started", describeLogDevice()])
+    }
 }
