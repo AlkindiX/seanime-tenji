@@ -1,7 +1,12 @@
 import { buildSeaQuery } from "@/api/client/requests"
-import { websocketConnectionStateAtom, websocketLastCloseAtom } from "@/api/components/websocket-provider"
+import {
+    isWebsocketRefusedForOrigin,
+    WEBSOCKET_NEEDS_PASSWORD_MESSAGE,
+    websocketConnectionStateAtom,
+    websocketLastCloseAtom,
+} from "@/api/components/websocket-provider"
 import { API_ENDPOINTS } from "@/api/generated/endpoints"
-import { useCurrentUser, useServerUrl } from "@/atoms/server.atoms"
+import { useCurrentUser, useServerStatus, useServerUrl } from "@/atoms/server.atoms"
 import { TVConfirmDrawer } from "@/components/tv/tv-confirm-drawer"
 import { TVDebugLogReceiverDrawer } from "@/components/tv/tv-debug-log-receiver-drawer"
 import { usePreferredFocus, useTVFocus } from "@/components/tv/tv-focus"
@@ -402,10 +407,13 @@ export function TVSettingsScreen() {
     const deviceSummary = useDeviceSummary()
     const socketState = useAtomValue(websocketConnectionStateAtom)
     const socketLastClose = useAtomValue(websocketLastCloseAtom)
+    const serverStatus = useServerStatus()
     // Torrent and debrid streams are started and followed over the websocket.
     const liveUpdatesDetail = socketState === "connected"
         ? "Connected"
-        : `Not connected${socketLastClose ? ` (closed with code ${socketLastClose.code}${socketLastClose.reason ? `: ${socketLastClose.reason}` : ""})` : ""}. Torrent and debrid streams need it.`
+        : isWebsocketRefusedForOrigin(serverStatus)
+            ? `Refused by the server. ${WEBSOCKET_NEEDS_PASSWORD_MESSAGE}`
+            : `Not connected${socketLastClose ? ` (closed with code ${socketLastClose.code}${socketLastClose.reason ? `: ${socketLastClose.reason}` : ""})` : ""}. Torrent and debrid streams need it.`
     const cacheRef = React.useRef<RowRef>(null)
     const serverRef = React.useRef<RowRef>(null)
 

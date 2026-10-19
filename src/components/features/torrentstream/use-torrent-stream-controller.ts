@@ -1,5 +1,5 @@
 import { getClientIdentity } from "@/api/client/client-identity"
-import { websocketConnectedAtom } from "@/api/components/websocket-provider"
+import { isWebsocketRefusedForOrigin, WEBSOCKET_NEEDS_PASSWORD_MESSAGE, websocketConnectedAtom } from "@/api/components/websocket-provider"
 import {
     Anime_Entry,
     Anime_Episode,
@@ -116,10 +116,15 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
     // The server says when the stream is ready over the websocket; without it the start would wait forever.
     const ensureLiveConnection = React.useCallback(() => {
         if (isLiveConnected || Platform.OS !== "web") return true
+        if (isWebsocketRefusedForOrigin(serverStatus)) {
+            log.error("Cannot start a stream: the server refuses the websocket until it has a password")
+            toast.error(WEBSOCKET_NEEDS_PASSWORD_MESSAGE)
+            return false
+        }
         log.error("Cannot start a stream: the websocket is not connected")
         toast.error("No live connection to the Seanime server, so the stream can't start. Check the connection and try again.")
         return false
-    }, [isLiveConnected])
+    }, [isLiveConnected, serverStatus])
     const isPreparingStream = useAtomValue(torrentStreamIsPreparingAtom)
     const loadingState = useAtomValue(torrentStreamLoadingStateAtom)
     const episodeSelectionLockedRef = React.useRef(false)

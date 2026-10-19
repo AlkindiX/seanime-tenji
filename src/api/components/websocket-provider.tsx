@@ -2,14 +2,15 @@ import { addClientQueryParams, getClientIdentity, saveClientIdentityFromEvent } 
 import { getServerBaseUrl } from "@/api/client/server-url"
 import { useWebsocketEventRouter } from "@/api/components/websocket-event-router"
 import { publishWsMessage, setWsSender, type WebsocketMessage } from "@/api/components/websocket-hub"
-import { useServerAuthToken, useServerUrl, useServerUrlProtocol } from "@/atoms/server.atoms"
+import type { Status } from "@/api/generated/types"
+import { useServerAuthToken, useServerStatus, useServerUrl, useServerUrlProtocol } from "@/atoms/server.atoms"
 import { degradeServerReachability, markServerReachable } from "@/lib/connection-state"
 import { manualOfflineModeAtom } from "@/lib/offline/manual-offline-mode"
 import { logger } from "@/lib/utils/logger"
 import { atom } from "jotai"
 import { useAtom, useAtomValue } from "jotai/react"
 import React from "react"
-import { AppState } from "react-native"
+import { AppState, Platform } from "react-native"
 
 const CLIENT_IDENTITY_EVENT = "client-identity"
 const log = logger("websocket-provider")
@@ -18,6 +19,20 @@ export const websocketConnectedAtom = atom(false)
 export const websocketConnectionStateAtom = atom<"idle" | "connecting" | "connected" | "disconnected">("idle")
 /** How the last connection ended, shown on the webOS settings screen for bug reports. */
 export const websocketLastCloseAtom = atom<{ code: number; reason: string } | null>(null)
+
+/**
+ * A Seanime server without a password refuses WebSocket handshakes from browser origins it
+ * doesn't trust (403, "requires either a server password or a trusted local origin"). The webOS
+ * app runs from file://, so its handshake always carries `Origin: null` and is always refused,
+ * while its HTTP requests carry no Origin and go through. Only a server password gets it in.
+ */
+export function isWebsocketRefusedForOrigin(status: Status | null | undefined): boolean {
+    if (Platform.OS !== "web" || !status || status.serverHasPassword) return false
+    return (globalThis as { origin?: unknown }).origin === "null"
+}
+
+export const WEBSOCKET_NEEDS_PASSWORD_MESSAGE =
+    "Seanime only accepts the TV app's live connection when the server has a password. Set a server password in Seanime, then sign in again on the TV."
 
 function parseMessage(data: unknown): WebsocketMessage | null {
     if (typeof data !== "string") return null
@@ -41,6 +56,10 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
     const [, setIsConnected] = useAtom(websocketConnectedAtom)
     const [, setConnectionState] = useAtom(websocketConnectionStateAtom)
     const [, setLastClose] = useAtom(websocketLastCloseAtom)
+    // read on close only, so a status refresh doesn't restart the socket
+    const serverStatus = useServerStatus()
+    const serverStatusRef = React.useRef(serverStatus)
+    serverStatusRef.current = serverStatus
 
     useWebsocketEventRouter()
 
@@ -151,6 +170,9 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
                     return
                 }
                 log.warning(`WebSocket #${socketId} closed`, closeInfo)
+                if (openedAt === null && isWebsocketRefusedForOrigin(serverStatusRef.current)) {
+                    log.warning("The server refuses this app's WebSocket: it has no password and the page's origin is null")
+                }
                 setLastClose({ code: event.code, reason: event.reason })
 
                 socket = null
