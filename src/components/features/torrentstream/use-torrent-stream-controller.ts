@@ -1,4 +1,5 @@
 import { getClientIdentity } from "@/api/client/client-identity"
+import { websocketConnectedAtom } from "@/api/components/websocket-provider"
 import {
     Anime_Entry,
     Anime_Episode,
@@ -21,18 +22,22 @@ import {
 import { useServerStatus } from "@/atoms/server.atoms"
 import { torrentSearchAcrossProvidersAtom, torrentSearchExtraProviderIdsAtom } from "@/atoms/torrent-search.atoms"
 import { getDefaultPlaybackSource } from "@/lib/default-playback-source"
+import { streamPlaybackType } from "@/lib/player/direct-stream"
 import {
     activeStreamSessionAtom,
     debridStreamStateAtom,
+    directStreamLoadingMessageAtom,
     streamSessionModeAtom,
     torrentStreamIsPreparingAtom,
     torrentStreamLoadingStateAtom,
     torrentStreamPendingInfoAtom,
 } from "@/lib/player"
 import { logger } from "@/lib/utils/logger"
+import { toast } from "@/lib/utils/toast"
 import { useAtom } from "jotai"
-import { useAtomValue } from "jotai/react"
+import { useAtomValue, useSetAtom } from "jotai/react"
 import * as React from "react"
+import { Platform } from "react-native"
 import {
     getFileSelectionValue,
     type StreamFilePreview,
@@ -107,6 +112,14 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
     const [usePreviousBatchPreference, setUsePreviousBatchPreference] = React.useState(false)
 
     const pendingStreamInfo = useAtomValue(torrentStreamPendingInfoAtom)
+    const isLiveConnected = useAtomValue(websocketConnectedAtom)
+    // The server says when the stream is ready over the websocket; without it the start would wait forever.
+    const ensureLiveConnection = React.useCallback(() => {
+        if (isLiveConnected || Platform.OS !== "web") return true
+        log.error("Cannot start a stream: the websocket is not connected")
+        toast.error("No live connection to the Seanime server, so the stream can't start. Check the connection and try again.")
+        return false
+    }, [isLiveConnected])
     const isPreparingStream = useAtomValue(torrentStreamIsPreparingAtom)
     const loadingState = useAtomValue(torrentStreamLoadingStateAtom)
     const episodeSelectionLockedRef = React.useRef(false)
@@ -353,14 +366,16 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
         episodeSelectionLockedRef.current = isEpisodeSelectionLocked
     }, [isEpisodeSelectionLocked])
 
+    const setDirectStreamLoadingMessage = useSetAtom(directStreamLoadingMessageAtom)
     const clearPendingStreamState = React.useCallback(() => {
+        setDirectStreamLoadingMessage(null)
         setPendingInfo(null)
         setStreamSessionMode(null)
         setIsPreparing(false)
         setLoadingState(null)
         setDebridStreamState(null)
         setActiveStreamSession(null)
-    }, [setActiveStreamSession, setDebridStreamState, setIsPreparing, setLoadingState, setPendingInfo, setStreamSessionMode])
+    }, [setActiveStreamSession, setDebridStreamState, setDirectStreamLoadingMessage, setIsPreparing, setLoadingState, setPendingInfo, setStreamSessionMode])
 
     const resetPicker = React.useCallback(() => {
         setPickerOpen(false)
@@ -415,7 +430,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
     }, [canUsePreviousBatch])
 
     const startAutoSelectedStream = React.useCallback((episode: Anime_Episode, mode: StreamMode = streamMode) => {
-        if (!episode.aniDBEpisode || !mediaId) return
+        if (!episode.aniDBEpisode || !mediaId || !ensureLiveConnection()) return
         episodeSelectionLockedRef.current = true
         log.info(`Starting ${mode} stream`, {
             mediaId,
@@ -454,7 +469,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
                     aniDBEpisode: episode.aniDBEpisode,
                     autoSelect: true,
                     fileId: "",
-                    playbackType: "externalPlayerLink",
+                    playbackType: streamPlaybackType(),
                     clientId: getClientIdentity().clientId,
                 },
                 {
@@ -484,7 +499,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
                 episodeNumber: episode.episodeNumber,
                 aniDBEpisode: episode.aniDBEpisode,
                 autoSelect: true,
-                playbackType: "externalPlayerLink",
+                playbackType: streamPlaybackType(),
                 clientId: getClientIdentity().clientId,
             },
             {
@@ -503,7 +518,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
             },
         )
     },
-        [clearPendingStreamState, entry, mediaId, resetPicker, setActiveStreamSession, setDebridStreamState, setIsPreparing, setLoadingState,
+        [clearPendingStreamState, ensureLiveConnection, entry, mediaId, resetPicker, setActiveStreamSession, setDebridStreamState, setIsPreparing, setLoadingState,
             setPendingInfo, setStreamSessionMode, startDebridStream, startTorrentStream, streamMode])
 
     const startManualStream = React.useCallback((params: {
@@ -514,7 +529,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
         batchEpisodeFiles?: HibikeTorrent_BatchEpisodeFiles
         launchMode?: StreamEpisodeLaunchMode
     }, mode: StreamMode = streamMode) => {
-        if (!params.episode.aniDBEpisode || !mediaId) return
+        if (!params.episode.aniDBEpisode || !mediaId || !ensureLiveConnection()) return
         episodeSelectionLockedRef.current = true
         log.info(`Starting ${mode} stream`, {
             mediaId,
@@ -565,7 +580,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
                     fileId: params.fileId ?? "",
                     fileIndex: params.fileIndex,
                     batchEpisodeFiles: params.batchEpisodeFiles,
-                    playbackType: "externalPlayerLink",
+                    playbackType: streamPlaybackType(),
                     clientId: getClientIdentity().clientId,
                 },
                 {
@@ -601,7 +616,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
                 torrent: params.torrent,
                 fileIndex: params.fileIndex,
                 batchEpisodeFiles: params.batchEpisodeFiles,
-                playbackType: "externalPlayerLink",
+                playbackType: streamPlaybackType(),
                 clientId: getClientIdentity().clientId,
             },
             {
@@ -623,7 +638,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
             },
         )
     },
-        [clearPendingStreamState, entry, mediaId, resetPicker, setActiveStreamSession, setDebridStreamState, setIsPreparing, setLoadingState,
+        [clearPendingStreamState, ensureLiveConnection, entry, mediaId, resetPicker, setActiveStreamSession, setDebridStreamState, setIsPreparing, setLoadingState,
             setPendingInfo, setStreamSessionMode, startDebridStream, startTorrentStream, streamMode])
 
     const buildBatchEpisodeFiles = React.useCallback((

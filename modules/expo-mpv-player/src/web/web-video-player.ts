@@ -11,6 +11,8 @@ import Hls from "hls.js"
 import type {
     AudioTrack,
     MpvChapter,
+    MpvMediaEvent,
+    MpvStreamedSubtitleLine,
     MpvVideoSource,
     OnPlaybackStateChangePayload,
     OnProgressEventPayload,
@@ -18,7 +20,7 @@ import type {
     TechnicalInfo,
 } from "../MpvPlayer.types"
 import { levelsAboveHeight, loadFailure, mediaOptionType, shouldReload, type SourceProbe } from "./media-pipeline"
-import { activeCues, parseSubtitles, stripMarkup, type SubtitleCue } from "./subtitles"
+import { activeCues, assDialogueCue, type AssTopStyles, parseAssStyles, parseSubtitles, stripMarkup, type SubtitleCue } from "./subtitles"
 
 export type WebVideoPlayerCallbacks = {
     onLoad: (payload: { url: string }) => void
@@ -41,6 +43,8 @@ type SubtitleEntry = {
     loading?: Promise<void>
     /** Added with addSubtitleFile, so a reload of the same source keeps it. */
     added?: boolean
+    /** A track of `source.streamedSubtitles`: its lines arrive while playing. */
+    streamed?: { number: number; topStyles: AssTopStyles; seen: Set<string> }
 }
 
 type BrowserAudioTrack = { enabled: boolean; label: string; language: string }
@@ -80,6 +84,23 @@ const HLS_MEDIA_RECOVERIES = 2
 
 /** How long the check of a source that failed to load may take. */
 const PROBE_TIMEOUT_MS = 5000
+
+/**
+ * How long a source may take to reach loadedmetadata. The TV's player can
+ * wait forever without an error, e.g. on audio it doesn't decode (FLAC in a
+ * video file) or a file whose index it can't get.
+ */
+const LOAD_TIMEOUT_MS = 45000
+
+/** How often `source.onMediaEvent` hears where playback is. */
+const STATUS_INTERVAL_MS = 5000
+
+/** Inserts a cue keeping the list sorted by start; streamed lines mostly arrive in order. */
+function insertCue(cues: SubtitleCue[], cue: SubtitleCue) {
+    let index = cues.length
+    while (index > 0 && cues[index - 1].start > cue.start) index--
+    cues.splice(index, 0, cue)
+}
 
 function isHidden() {
     return typeof document !== "undefined" && document.hidden
@@ -155,6 +176,9 @@ export class WebVideoPlayer {
     private hlsRecoveries = 0
     /** Bumped on every load, so late answers about an older source are dropped. */
     private loadId = 0
+    private unsubscribeStreamedSubtitles: (() => void) | null = null
+    private loadTimer: ReturnType<typeof setTimeout> | null = null
+    private lastStatusAt = 0
     private readonly onVisibilityChange = () => this.handleVisibilityChange()
 
     constructor(
@@ -177,7 +201,10 @@ export class WebVideoPlayer {
                 this.callbacks.onTracksReady()
             }
         })
-        on("play", () => this.state({ isPaused: false }))
+        on("play", () => {
+            this.state({ isPaused: false })
+            this.mediaEvent("play")
+        })
         on("playing", () => {
             this.state({ isPlaying: true, isPaused: false, isLoading: false })
             this.startCueTimer()
@@ -185,24 +212,31 @@ export class WebVideoPlayer {
         on("pause", () => {
             this.state({ isPlaying: false, isPaused: true })
             this.stopCueTimer()
+            this.mediaEvent("pause")
         })
         on("waiting", () => this.state({ isLoading: true }))
         on("seeking", () => this.state({ isLoading: true }))
         on("seeked", () => {
             if (video.readyState >= 3 || video.paused) this.state({ isLoading: false })
             this.updateCues()
+            this.mediaEvent("seeked")
         })
-        on("ended", () => this.state({ eofReached: true, isPaused: true, isPlaying: false }))
+        on("ended", () => {
+            this.state({ eofReached: true, isPaused: true, isPlaying: false })
+            this.mediaEvent("ended")
+        })
         on("ratechange", () => this.state({ speed: video.playbackRate }))
         on("timeupdate", () => {
             this.emitProgress()
             this.updateCues()
+            if (Date.now() - this.lastStatusAt >= STATUS_INTERVAL_MS) this.mediaEvent("status")
         })
         on("durationchange", () => this.emitProgress())
         on("error", () => {
             const error = video.error
             const source = this.source
             if (!error || !source) return
+            this.clearLoadTimer()
             // MSE decode errors reach the element, not hls.js's ERROR event.
             if (this.hls && error.code === 3 && this.recoverHlsMediaError()) return
             const message = error.message || MEDIA_ERRORS[error.code] || "Playback failed"
@@ -232,10 +266,12 @@ export class WebVideoPlayer {
             title: sub.title ?? fileTitle(sub.url),
             lang: sub.lang,
         }))
+        this.subscribeStreamedSubtitles(source)
 
         const { video } = this
         video.autoplay = false
         this.loadId++
+        this.startLoadTimer()
         const headers = this.requestHeaders(source)
         // The TV's own HLS player can't add headers to playlist and segment
         // requests, and a file:// app has to authenticate every request to
@@ -301,6 +337,30 @@ export class WebVideoPlayer {
         return true
     }
 
+    private startLoadTimer() {
+        this.clearLoadTimer()
+        const loadId = this.loadId
+        this.loadTimer = setTimeout(() => {
+            this.loadTimer = null
+            if (loadId !== this.loadId || !this.source || this.video.readyState >= 1 || this.video.error) return
+            // A hidden app is suspended; that is not the file's fault.
+            if (isHidden()) {
+                this.startLoadTimer()
+                return
+            }
+            console.warn("[web-video-player] no metadata after", LOAD_TIMEOUT_MS, "ms", {
+                networkState: this.video.networkState,
+                src: this.video.currentSrc,
+            })
+            this.callbacks.onError({ error: `The TV's player did not start this video within ${LOAD_TIMEOUT_MS / 1000} seconds`, code: 4 })
+        }, LOAD_TIMEOUT_MS)
+    }
+
+    private clearLoadTimer() {
+        if (this.loadTimer !== null) clearTimeout(this.loadTimer)
+        this.loadTimer = null
+    }
+
     /** A source that didn't load: say so when it was the server or network, not the format. */
     private async reportLoadFailure(source: MpvVideoSource, message: string) {
         const loadId = this.loadId
@@ -317,6 +377,9 @@ export class WebVideoPlayer {
 
     private reset() {
         this.stopCueTimer()
+        this.clearLoadTimer()
+        this.unsubscribeStreamedSubtitles?.()
+        this.unsubscribeStreamedSubtitles = null
         this.hls?.destroy()
         this.hls = null
         this.source = null
@@ -342,6 +405,7 @@ export class WebVideoPlayer {
 
         const usedMediaOption = !!this.mediaOptionSource
         this.clearMediaOptionTimer()
+        this.clearLoadTimer()
         if (this.mediaOptionRetry) {
             // The file plays without mediaOption, so it was mediaOption the TV refused.
             this.mediaOptionRetry = false
@@ -354,6 +418,7 @@ export class WebVideoPlayer {
             this.video.currentTime = start
         }
         this.callbacks.onLoad({ url: source.url })
+        this.mediaEvent("loadedmetadata")
         // The rate carries over loads (defaultPlaybackRate) with no ratechange to say so.
         this.state({ speed: this.video.playbackRate })
         this.emitProgress()
@@ -711,6 +776,55 @@ export class WebVideoPlayer {
     private stopCueTimer() {
         if (this.cueTimer !== null) clearInterval(this.cueTimer)
         this.cueTimer = null
+    }
+
+    /**
+     * Streamed tracks are listed before any line arrives; their cues fill in
+     * as the server reads the file (and again from a new position after a
+     * seek, so lines already known are skipped).
+     */
+    private subscribeStreamedSubtitles(source: MpvVideoSource) {
+        const streamed = source.streamedSubtitles
+        if (!streamed) return
+        for (const track of streamed.tracks) {
+            this.subtitles.push({
+                title: track.title,
+                lang: track.lang,
+                codec: track.codec,
+                cues: [],
+                streamed: { number: track.number, topStyles: parseAssStyles(track.header ?? ""), seen: new Set() },
+            })
+        }
+        this.unsubscribeStreamedSubtitles = streamed.subscribe(lines => this.addStreamedLines(lines))
+        if (streamed.tracks.length > 0) this.callbacks.onTracksReady()
+    }
+
+    private addStreamedLines(lines: MpvStreamedSubtitleLine[]) {
+        let selectedChanged = false
+        for (const line of lines) {
+            const index = this.subtitles.findIndex(entry => entry.streamed?.number === line.trackNumber)
+            const entry = this.subtitles[index]
+            if (!entry?.streamed || !entry.cues) continue
+            const key = `${line.start}|${line.end}|${line.text}`
+            if (entry.streamed.seen.has(key)) continue
+            entry.streamed.seen.add(key)
+            const cue = assDialogueCue(line.text, line.start, line.end, line.style ?? "", entry.streamed.topStyles)
+            if (!cue) continue
+            insertCue(entry.cues, cue)
+            if (index + 1 === this.selectedSubtitle) selectedChanged = true
+        }
+        if (selectedChanged) this.updateCues(true)
+    }
+
+    private mediaEvent(type: MpvMediaEvent["type"]) {
+        const listener = this.source?.onMediaEvent
+        if (!listener) return
+        this.lastStatusAt = Date.now()
+        try {
+            listener({ type, currentTime: this.video.currentTime, duration: this.duration(), paused: this.video.paused })
+        } catch (error) {
+            console.warn("[web-video-player] media event listener failed", error)
+        }
     }
 
     ///////////////////////////////////////////////////////////////////////////

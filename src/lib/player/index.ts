@@ -23,6 +23,7 @@ export {
     activeStreamSessionAtom,
     currentPlaybackSourceAtom,
     debridStreamStateAtom,
+    directStreamLoadingMessageAtom,
     playerOpenAtom,
     playerLoadingMessageAtom,
     playerErrorAtom,

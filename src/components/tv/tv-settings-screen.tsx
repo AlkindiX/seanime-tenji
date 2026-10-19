@@ -1,5 +1,5 @@
 import { buildSeaQuery } from "@/api/client/requests"
-import { websocketConnectionStateAtom } from "@/api/components/websocket-provider"
+import { websocketConnectionStateAtom, websocketLastCloseAtom } from "@/api/components/websocket-provider"
 import { API_ENDPOINTS } from "@/api/generated/endpoints"
 import { useCurrentUser, useServerUrl } from "@/atoms/server.atoms"
 import { TVConfirmDrawer } from "@/components/tv/tv-confirm-drawer"
@@ -400,6 +400,12 @@ export function TVSettingsScreen() {
     const [checkingOta, setCheckingOta] = React.useState(false)
     const version = React.useMemo(() => getOtaVersionInfo(), [])
     const deviceSummary = useDeviceSummary()
+    const socketState = useAtomValue(websocketConnectionStateAtom)
+    const socketLastClose = useAtomValue(websocketLastCloseAtom)
+    // Torrent and debrid streams are started and followed over the websocket.
+    const liveUpdatesDetail = socketState === "connected"
+        ? "Connected"
+        : `Not connected${socketLastClose ? ` (closed with code ${socketLastClose.code}${socketLastClose.reason ? `: ${socketLastClose.reason}` : ""})` : ""}. Torrent and debrid streams need it.`
     const cacheRef = React.useRef<RowRef>(null)
     const serverRef = React.useRef<RowRef>(null)
 
@@ -569,6 +575,14 @@ export function TVSettingsScreen() {
                                 label="This TV"
                                 detail={deviceSummary.device}
                                 icon="tv-outline"
+                                onPress={noop}
+                                showChevron={false}
+                            />
+                            <Divider />
+                            <SettingsRow
+                                label="Live updates"
+                                detail={liveUpdatesDetail}
+                                icon="pulse-outline"
                                 onPress={noop}
                                 showChevron={false}
                             />

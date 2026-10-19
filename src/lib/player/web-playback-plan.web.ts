@@ -1,9 +1,11 @@
 import { getClientIdentity } from "@/api/client/client-identity"
 import { buildSeaQuery } from "@/api/client/requests"
 import { appendServerHMACToken, getServerAuthHeaders } from "@/api/client/server-auth"
+import { getServerBaseUrl } from "@/api/client/server-url"
 import { API_ENDPOINTS } from "@/api/generated/endpoints"
 import { useGetContinuityWatchHistory } from "@/api/hooks/continuity.hooks"
 import type { MediaInfo, Mediastream_MediaContainer, Models_MediastreamSettings } from "@/api/generated/types"
+import { useServerUrl } from "@/atoms/server.atoms"
 import { logger } from "@/lib/utils/logger"
 import { toast } from "@/lib/utils/toast"
 import { describeDevice, getDeviceInfo } from "@/lib/webos/device-info"
@@ -17,6 +19,8 @@ import {
 } from "@/lib/webos/playback-capabilities"
 import type { MpvChapter, MpvExternalSubtitle } from "expo-mpv-player"
 import React from "react"
+import { createDirectStreamSession, describeStreamCodecs, type DirectStreamSession, directStreamChapters } from "./direct-stream"
+import { proxiedUrl } from "./online-proxy"
 import { getWatchHistoryResumePosition } from "./resume-position"
 import type { MobilePlaybackSource, WebPlaybackPlan } from "./types"
 
@@ -176,7 +180,12 @@ function describeFileCodec(mediaInfo: MediaInfo | undefined) {
 function decodeErrorMessage(source: MobilePlaybackSource, resolved: Resolved | null) {
     const base = "The TV could not decode this video"
     if (!resolved?.library) {
-        return `${base}. Only files in your library can be transcoded by the server; this stream plays as it is.`
+        const codecs = describeStreamCodecs(source.mkvMetadata)
+        const what = [codecs.video, ...codecs.audio].filter(Boolean).join(", ")
+        const audioHint = codecs.riskyAudio.length > 0
+            ? ` LG TVs don't play ${codecs.riskyAudio.join(" or ")} audio in video files; pick a release with AAC or AC-3 audio.`
+            : ""
+        return `${base}${what ? ` (${what})` : ""}.${audioHint} Only files in your library can be transcoded by the server; streams play as they are.`
     }
     const summary = resolved.plan.mediaInfoSummary
     if (summary?.mode === "transcode") return `${base}, even after the server transcoded it to H.264.`
@@ -204,6 +213,32 @@ function announce(plan: Omit<WebPlaybackPlan, "onPlaybackError">, audioWarnings:
     }
 }
 
+/** One direct-stream session per source, ended (which stops the server's stream) when the player leaves it. */
+function useDirectStreamSession(source: MobilePlaybackSource | null) {
+    const [current, setCurrent] = React.useState<{ id: string; session: DirectStreamSession } | null>(null)
+    const latest = React.useRef(source)
+    latest.current = source
+    const id = source?.directStreamPlaybackId ? source.id : null
+
+    React.useEffect(() => {
+        const source = latest.current
+        if (!id || !source) {
+            setCurrent(null)
+            return
+        }
+        const session = createDirectStreamSession(source)
+        if (!session) return
+        setCurrent({ id, session })
+        const { riskyAudio } = describeStreamCodecs(source.mkvMetadata)
+        if (riskyAudio.length > 0) {
+            toast.warning(`This TV may not play ${riskyAudio.join(" or ")} audio. If the video doesn't start, pick a release with AAC audio.`, { visibilityTime: 6000 })
+        }
+        return () => session.terminate()
+    }, [id])
+
+    return current
+}
+
 /**
  * The webOS player plays what the TV decodes, so library files are checked
  * first: the server lists their subtitle tracks (which browsers can't read
@@ -215,6 +250,8 @@ export function useWebPlaybackPlan(source: MobilePlaybackSource | null): WebPlay
     // Set when a direct-play file failed to decode: play it transcoded from there.
     const [fallback, setFallback] = React.useState<{ id: string; position?: number } | null>(null)
     const { data: watchHistory } = useGetContinuityWatchHistory()
+    const directStream = useDirectStreamSession(source)
+    const serverUrl = useServerUrl()
     const library = isLibraryFile(source)
     const streamIsHls = source?.streamKind === "hls"
     const forceTranscode = !!source && fallback?.id === source.id
@@ -276,11 +313,50 @@ export function useWebPlaybackPlan(source: MobilePlaybackSource | null): WebPlay
 
     return React.useMemo(() => {
         if (!source) return undefined
+        if (source.directStreamPlaybackId) {
+            // Wait for the session, or the server would never hear the player loaded.
+            if (directStream?.id !== source.id) return undefined
+            const codecs = describeStreamCodecs(source.mkvMetadata)
+            return {
+                externalSubtitles: NO_SUBTITLES,
+                mediaInfoSummary: {
+                    mode: "direct",
+                    reasons: codecs.riskyAudio.map(name => `${name} audio`),
+                    videoCodec: codecs.video,
+                    audioCodec: codecs.audio.join(", ") || undefined,
+                    resolution: codecs.resolution,
+                },
+                chapters: directStreamChapters(source.mkvMetadata),
+                streamedSubtitles: directStream.session.streamedSubtitles,
+                onMediaEvent: directStream.session.onMediaEvent,
+                onPlaybackError,
+            }
+        }
+        if (source.continuityKind === "onlinestream" && serverUrl) {
+            // Through the server's proxy: the extension's host would refuse the TV directly.
+            const server = getServerBaseUrl(serverUrl)
+            const proxy = (url: string) => proxiedUrl(server, url, source.headers, appendServerHMACToken)
+            return {
+                url: proxy(source.url),
+                // Sent by the proxy; an empty object keeps the player from using the source's own.
+                headers: {},
+                isHls: streamIsHls,
+                // hls.js: the TV's own HLS player is the one webOS 26 reportedly refuses.
+                preferMse: streamIsHls,
+                externalSubtitles: NO_SUBTITLES,
+                sourceSubtitles: (source.externalSubtitles ?? []).map(subtitle => ({
+                    url: proxy(subtitle.url),
+                    title: subtitle.language || undefined,
+                    lang: subtitle.language || undefined,
+                })),
+                onPlaybackError,
+            }
+        }
         if (!library) {
             // The player would otherwise guess from the URL, and online HLS links may lack ".m3u8".
             return { externalSubtitles: NO_SUBTITLES, isHls: streamIsHls, onPlaybackError }
         }
         if (!current) return undefined
         return { ...current.plan, onPlaybackError }
-    }, [current, library, onPlaybackError, source, streamIsHls])
+    }, [current, directStream, library, onPlaybackError, serverUrl, source, streamIsHls])
 }
