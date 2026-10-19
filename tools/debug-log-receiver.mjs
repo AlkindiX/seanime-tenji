@@ -82,11 +82,14 @@ const server = http.createServer((req, res) => {
         }
 
         const from = String(req.socket.remoteAddress ?? "").replace(/^::ffff:/, "")
+        // the page's origin, which the server's WebSocket origin check also sees;
+        // a missing header and the string "null" (opaque origin) are not the same
+        const origin = req.headers.origin ?? null
         const device = JSON.stringify(payload.device ?? {})
         if (device !== lastDevice) {
             lastDevice = device
-            console.log(`\n--- device ${device} (${from})`)
-            out.write(JSON.stringify({ receivedAt: new Date().toISOString(), device: payload.device, from }) + "\n")
+            console.log(`\n--- device ${device} (${from}, Origin header ${origin === null ? "absent" : JSON.stringify(origin)})`)
+            out.write(JSON.stringify({ receivedAt: new Date().toISOString(), device: payload.device, from, origin }) + "\n")
         }
 
         const entries = Array.isArray(payload.entries) ? payload.entries : []
