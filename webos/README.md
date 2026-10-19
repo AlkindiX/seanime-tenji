@@ -14,10 +14,12 @@ media keys; the Magic Remote pointer also works.
   its spacing, so on webOS 6 many screens are visibly cramped: icons touch their labels,
   stacked text and fields have no space between them, and cards and the hero's buttons
   sit against each other. Everything still works; it just looks unfinished there.
-- **A server password on your Seanime server.** A packaged webOS app runs from
-  `file://`, so the browser marks its requests `Origin: null`. Without a password the
-  server rejects them to protect against requests from websites. With a password set,
-  Tenji authenticates every request. Set one in the server settings or in `config.toml`:
+- **A server password is optional.** A packaged webOS app runs from `file://`, and a
+  Seanime server without a password refuses the app's own WebSocket (`Origin: null`). The
+  IPK therefore brings a small JS service that opens that connection for the app; see
+  [Live connection](#live-connection). If the service is missing from an install, the app
+  says so and asks for a password instead. With a password set, Tenji authenticates every
+  request. Set one in the server settings or in `config.toml`:
 
   ```toml
   [server]
@@ -49,7 +51,9 @@ ways:
 - **[Homebrew Channel](https://www.webosbrew.org/)** (rooted TVs): install the `.ipk`
   from its settings.
 
-`dist/webos/app` is the unpacked app if you'd rather package it with `ares-package`.
+`dist/webos/app` is the unpacked app and `dist/webos/service` its JS service, if you'd rather
+package them with `ares-package dist/webos/app dist/webos/service`. Every way of installing
+above installs the service with the app.
 
 The launcher shows the app on a `#1c154a` tile (`iconColor`) with a short description, and
 the TV shows `splash.png` while the app loads. The build checks that every image named in
@@ -135,11 +139,54 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   through it too. HLS plays through hls.js. The proxy follows the server's security mode:
   in strict mode it won't fetch from private-network addresses.
 
+## Live connection
+
+Torrent and debrid streams are started and followed over a WebSocket to the server
+(`/events`). A packaged webOS app runs from `file://`, so the browser sends `Origin: null`
+with that handshake, and a page can't change the header. A Seanime server without a
+password answers it with 403 ("requires either a server password or a trusted local
+origin"): the check keeps websites in a browser away from the server. Requests that carry no
+Origin at all, like the native apps' and the TV app's HTTP requests, pass.
+
+So the IPK carries a JS service, `app.seanime.tenji.service` (`webos/service/`), that opens
+the WebSocket from Node, which sends no Origin, and relays it to the app over the Luna bus:
+
+- The app calls `luna://app.seanime.tenji.service/connect` with the `ws://` or `wss://` URL and
+  `subscribe: true` through `PalmServiceBridge`. The subscription answers
+  `{event: "connecting", socketId}` right away, then `open`, `message` (text frames), `error`
+  and `close` (code, reason) as the socket goes. `send` and `close` take the `socketId`.
+- On the app's side, `src/lib/webos/luna-websocket.ts` wraps this in the part of the browser's
+  `WebSocket` that `websocket-provider.tsx` uses, so reconnecting, the close codes in Settings
+  and `websocketLastCloseAtom` work as before. A refused or failed handshake closes with 1006
+  after an `error` naming the cause, e.g. `Unexpected server response: 403`.
+- Cancelling the subscription closes the server socket. The app cancels it when it closes a
+  socket, and the bus cancels it when the app exits. The service exits 35 seconds after its
+  last subscription ends.
+- The service is `ws` 7 bundled by esbuild for Node 8.12, the Node of webOS 5 and 6; webOS 22
+  and 23 have Node 12, later releases newer. `webos-service` comes with the TV and is not
+  bundled. ws 8 needs Node 10, so `package.json` pins ws 7 and the build checks for it.
+- `webos/build.mjs` writes it to `usr/palm/services/app.seanime.tenji.service/` in the IPK
+  (`service.js`, `package.json`, `services.json` and ws's license), lists it under `services`
+  in `packageinfo.json`, and makes that directory 0777, as LG's `ares-package` does. LG
+  requires the service ID to start with the app ID followed by a dot.
+- **Without the service** (the bus answers "Service does not exist" or refuses the call), the
+  app uses the page's own WebSocket for the rest of the session. With no server password
+  that is refused, and Settings and the stream error ask for a password, as they did before
+  the service existed.
+
+Settings › *Live updates* says "Connected through the app's relay service" when the socket
+goes through it. In the debug logs every WebSocket attempt shows `via: "relay"` or
+`via: "browser"`, and the relay's errors come through as the socket's `error` events. The
+service also writes `[relay]` lines (without the password token) to the TV's system log; with
+Developer Mode, `ares-inspect --device tv --service app.seanime.tenji.service --open` opens
+its inspector.
+
 ## About this TV
 
 On webOS, Settings shows *Live updates*, the state of the websocket to the server, with how
-the last connection closed. Torrent and debrid streams are started and followed over it,
-so without it they can't start; Tenji then says so instead of waiting.
+the last connection closed and whether it goes through the relay service. Torrent and debrid
+streams are started and followed over it, so without it they can't start; Tenji then says so
+instead of waiting.
 
 Settings also shows the model, webOS version (the platform version the TV reports,
 e.g. 6.3.0), panel resolution, HDR10 and Dolby Vision support, and which notable video
@@ -202,6 +249,15 @@ are released, so a long seek doesn't continue when you come back.
   authenticated) were checked but not its picture.
 - The real answers of the Luna calls on each webOS version, and ACG enforcement on webOS 26.
 - Whether `mediaOption` resumes faster on a TV (see Resuming).
+- The relay service on a TV (see Live connection). The relay was tested against a local `ws`
+  server, the app's side through a stand-in `PalmServiceBridge`, and the built bundle with a
+  stand-in `webos-service`, all in Node 22. Still to check on a TV: that Developer Mode and
+  Homebrew Channel installs start the service; that the bundle runs on Node 8.12 (webOS 6)
+  and Node 12 (webOS 22/23); that `PalmServiceBridge` delivers every subscription answer and
+  passes on `cancel()`; that a passwordless Seanime accepts the relay's handshake from
+  another machine; and that large server messages pass over the bus. LG documents no size
+  limit for Luna messages. LG's ACG guide doesn't say whether webOS 26 checks an app's
+  calls to its own service; a refused call counts as a missing service.
 
 ## Debug logs
 
@@ -262,4 +318,9 @@ webOS setup (see `metro.config.js`):
   rewritten. Flexbox `gap` and `aspect-ratio` can't be, so webOS 6 ignores them.
   CSS that react-native-web makes at runtime never passes through the build;
   `src/lib/webos/ordered-css-stylesheet.ts` rewrites what old engines drop there
-  (`overflow: clip`). It also adds polyfills and writes the `.ipk`.
+  (`overflow: clip`). It also adds polyfills, bundles the JS service
+  (`webos/service-build.mjs`) and writes the `.ipk`.
+- `webos/service/` is the JS service that relays the WebSocket (`relay.ts`, entry point
+  `service.ts`), and `src/lib/webos/luna-websocket.ts` is its counterpart in the app. A
+  desktop browser has no Luna bus, so `npm run dev:webos` uses the browser's WebSocket.
+  `tests/webos-websocket-relay.test.ts` covers both sides.

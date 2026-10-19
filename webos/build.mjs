@@ -3,11 +3,13 @@
  * Builds Seanime Tenji for LG webOS TVs: `npm run build:webos`
  *
  *   dist/webos/app/                         the packaged web app (appinfo.json + files)
+ *   dist/webos/service/                     the app's JS service, the WebSocket relay (webos/service/)
  *   dist/webos/app.seanime.tenji_<v>_all.ipk  installable package (ares-install, Homebrew Channel, Dev Manager)
  *
  * Steps: check the appinfo.json images, export the TV interface for web with
  * Expo, make every URL relative (webOS loads the app from file://), lower JS
- * and CSS for older TV browsers, add polyfills, then write the IPK.
+ * and CSS for older TV browsers, add polyfills, bundle the JS service for
+ * Node 8, then write the IPK.
  *
  * Flags: --skip-export  reuse dist/webos/www from a previous run
  */
@@ -17,6 +19,7 @@ import { createRequire } from "node:module"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import zlib from "node:zlib"
+import { buildService, SERVICE_NODE } from "./service-build.mjs"
 
 const require = createRequire(import.meta.url)
 const esbuild = require("esbuild")
@@ -28,6 +31,7 @@ const webosDir = path.join(root, "webos")
 const outDir = path.join(root, "dist", "webos")
 const exportDir = path.join(outDir, "www")
 const appDir = path.join(outDir, "app")
+const serviceDir = path.join(outDir, "service")
 
 // webOS 6 (2021 TVs) ships Chromium 79; later releases only move forward.
 const CHROME = 79
@@ -315,12 +319,12 @@ function tarHeader(name, size, type, mode) {
     return header
 }
 
-/** entries: [{ name: "usr/", dir: true } | { name: "usr/x", data: Buffer }] */
+/** entries: [{ name: "usr/", dir: true, mode? } | { name: "usr/x", data: Buffer }] */
 function targz(entries) {
     const chunks = []
     for (const entry of entries) {
         if (entry.dir) {
-            chunks.push(tarHeader(entry.name, 0, "5", 0o755))
+            chunks.push(tarHeader(entry.name, 0, "5", entry.mode ?? 0o755))
             continue
         }
         chunks.push(tarHeader(entry.name, entry.data.length, "0", 0o644), entry.data)
@@ -347,13 +351,13 @@ function directoryEntries(filePath) {
     return parts.map((_, index) => `${parts.slice(0, index + 1).join("/")}/`)
 }
 
-function writeIpk(appinfo) {
+function writeIpk(appinfo, serviceId) {
     const id = appinfo.id
     const installRoot = `usr/palm/applications/${id}`
-    const files = walk(appDir).sort()
+    const serviceRoot = `usr/palm/services/${serviceId}`
 
     // Same layout as LG's ares-package output.
-    const packageinfo = { id, version: appinfo.version, app: id }
+    const packageinfo = { id, version: appinfo.version, app: id, services: [serviceId] }
 
     const entries = []
     const dirs = new Set()
@@ -361,17 +365,22 @@ function writeIpk(appinfo) {
         for (const dir of directoryEntries(name)) {
             if (!dirs.has(dir)) {
                 dirs.add(dir)
-                entries.push({ name: dir, dir: true })
+                // ares-package makes the service's own directory writable (0777); the rest is 0755.
+                entries.push({ name: dir, dir: true, mode: dir === `${serviceRoot}/` ? 0o777 : 0o755 })
             }
         }
         entries.push({ name, data })
     }
     let installedSize = 0
-    for (const file of files) {
-        const data = fs.readFileSync(file)
-        installedSize += data.length
-        addFile(`${installRoot}/${path.relative(appDir, file).split(path.sep).join("/")}`, data)
+    const addTree = (sourceDir, installDir) => {
+        for (const file of walk(sourceDir).sort()) {
+            const data = fs.readFileSync(file)
+            installedSize += data.length
+            addFile(`${installDir}/${path.relative(sourceDir, file).split(path.sep).join("/")}`, data)
+        }
     }
+    addTree(appDir, installRoot)
+    addTree(serviceDir, serviceRoot)
     addFile(`usr/palm/packages/${id}/packageinfo.json`, Buffer.from(JSON.stringify(packageinfo, null, 2) + "\n"))
 
     const control = [
@@ -431,8 +440,12 @@ async function main() {
         fs.copyFileSync(path.join(webosDir, appinfo[field]), path.join(appDir, appinfo[field]))
     }
 
-    const ipkPath = writeIpk(appinfo)
+    log(`Bundling the WebSocket relay service for Node ${SERVICE_NODE}…`)
+    const serviceId = await buildService({ appId: appinfo.id, version: appinfo.version, outDir: serviceDir })
+
+    const ipkPath = writeIpk(appinfo, serviceId)
     log(`App directory: ${path.relative(root, appDir)}`)
+    log(`Service:       ${path.relative(root, serviceDir)} (${serviceId})`)
     log(`Package:       ${path.relative(root, ipkPath)}`)
 }
 

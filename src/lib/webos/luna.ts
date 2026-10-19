@@ -1,7 +1,7 @@
 /**
- * One-shot Luna service calls through `PalmServiceBridge`, the object LG's
- * webOSTV.js builds `webOS.service.request` on. This is the part of that
- * library the app needs, without loading it.
+ * Luna service calls through `PalmServiceBridge`, the object LG's webOSTV.js
+ * builds `webOS.service.request` on. This is the part of that library the app
+ * needs, without loading it.
  *
  * On webOS TV 26 and later, a Luna call is refused unless appinfo.json lists
  * the service's access control group in `requiredACG`.
@@ -76,4 +76,52 @@ export function lunaCall(uri: string, params: Record<string, unknown> = {}, { ti
             finish(null)
         }
     })
+}
+
+export type LunaSubscription = { cancel: () => void }
+
+/**
+ * Calls `uri` with `subscribe: true` and hands every response to `onResponse`
+ * until `cancel()`, failures included: `returnValue: false` with an
+ * `errorCode`/`errorText`, which is how the bus says a service doesn't exist
+ * or refused the call. Answers that aren't JSON objects are dropped. Returns
+ * null outside a TV or when the bridge throws.
+ */
+export function lunaSubscribe(uri: string, params: Record<string, unknown>, onResponse: (response: LunaResponse) => void): LunaSubscription | null {
+    if (!hasLunaBridge()) return null
+    const Bridge = (window as BridgeWindow).PalmServiceBridge!
+
+    let bridge: ServiceBridge | null = null
+    const cancel = () => {
+        const current = bridge
+        if (!current) return
+        bridge = null
+        inFlight.delete(current)
+        try {
+            current.cancel?.()
+        } catch {
+            // Already closed by the service.
+        }
+    }
+
+    try {
+        const created = new Bridge()
+        bridge = created
+        inFlight.add(created)
+        created.onservicecallback = (message) => {
+            if (bridge !== created) return
+            let response: unknown
+            try {
+                response = JSON.parse(message)
+            } catch {
+                return
+            }
+            if (response && typeof response === "object") onResponse(response as LunaResponse)
+        }
+        created.call(uri, JSON.stringify({ ...params, subscribe: true }))
+    } catch {
+        cancel()
+        return null
+    }
+    return { cancel }
 }

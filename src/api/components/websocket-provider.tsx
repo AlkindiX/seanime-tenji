@@ -7,6 +7,7 @@ import { useServerAuthToken, useServerStatus, useServerUrl, useServerUrlProtocol
 import { degradeServerReachability, markServerReachable } from "@/lib/connection-state"
 import { manualOfflineModeAtom } from "@/lib/offline/manual-offline-mode"
 import { logger } from "@/lib/utils/logger"
+import { isWebSocketRelayUsable, LunaWebSocket, type ServerSocket } from "@/lib/webos/luna-websocket"
 import { atom } from "jotai"
 import { useAtom, useAtomValue } from "jotai/react"
 import React from "react"
@@ -19,20 +20,30 @@ export const websocketConnectedAtom = atom(false)
 export const websocketConnectionStateAtom = atom<"idle" | "connecting" | "connected" | "disconnected">("idle")
 /** How the last connection ended, shown on the webOS settings screen for bug reports. */
 export const websocketLastCloseAtom = atom<{ code: number; reason: string } | null>(null)
+/** Who opened the current connection: the app's webOS service ("relay") or the page itself. */
+export const websocketTransportAtom = atom<"relay" | "browser" | null>(null)
 
 /**
  * A Seanime server without a password refuses WebSocket handshakes from browser origins it
  * doesn't trust (403, "requires either a server password or a trusted local origin"). The webOS
- * app runs from file://, so its handshake always carries `Origin: null` and is always refused,
- * while its HTTP requests carry no Origin and go through. Only a server password gets it in.
+ * app runs from file://, so its own handshake always carries `Origin: null` and is always refused,
+ * while its HTTP requests carry no Origin and go through. The app's webOS service opens the socket
+ * from Node without an Origin instead; without that service, only a server password gets it in.
  */
 export function isWebsocketRefusedForOrigin(status: Status | null | undefined): boolean {
     if (Platform.OS !== "web" || !status || status.serverHasPassword) return false
+    if (isWebSocketRelayUsable()) return false
     return (globalThis as { origin?: unknown }).origin === "null"
 }
 
 export const WEBSOCKET_NEEDS_PASSWORD_MESSAGE =
     "Seanime only accepts the TV app's live connection when the server has a password. Set a server password in Seanime, then sign in again on the TV."
+
+/** On a TV, through the app's webOS service (see luna-websocket.ts) unless it turned out to be missing. */
+function openServerSocket(url: string): { socket: ServerSocket; via: "relay" | "browser" } {
+    if (Platform.OS === "web" && isWebSocketRelayUsable()) return { socket: new LunaWebSocket(url), via: "relay" }
+    return { socket: new WebSocket(url), via: "browser" }
+}
 
 function parseMessage(data: unknown): WebsocketMessage | null {
     if (typeof data !== "string") return null
@@ -56,6 +67,7 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
     const [, setIsConnected] = useAtom(websocketConnectedAtom)
     const [, setConnectionState] = useAtom(websocketConnectionStateAtom)
     const [, setLastClose] = useAtom(websocketLastCloseAtom)
+    const [, setTransport] = useAtom(websocketTransportAtom)
     // read on close only, so a status refresh doesn't restart the socket
     const serverStatus = useServerStatus()
     const serverStatusRef = React.useRef(serverStatus)
@@ -71,7 +83,7 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
             return
         }
 
-        let socket: WebSocket | null = null
+        let socket: ServerSocket | null = null
         let cancelled = false
         let retryCount = 0
         let retryTimer: ReturnType<typeof setTimeout> | null = null
@@ -98,9 +110,9 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
             const socketId = ++socketCount
             const startedAt = Date.now()
             let openedAt: number | null = null
-            let nextSocket: WebSocket
+            let opened: ReturnType<typeof openServerSocket>
             try {
-                nextSocket = new WebSocket(url)
+                opened = openServerSocket(url)
             }
             catch (error) {
                 // a malformed URL throws here instead of firing "error"
@@ -108,10 +120,12 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
                 setConnectionState("disconnected")
                 return
             }
+            const { socket: nextSocket, via } = opened
             socket = nextSocket
             log.info(`Connecting to WebSocket #${socketId}`, url, {
                 attempt: retryCount + 1,
                 hasToken: Boolean(serverAuthToken),
+                via,
             })
 
             nextSocket.addEventListener("open", () => {
@@ -120,6 +134,7 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
                 log.info(`WebSocket #${socketId} opened`, { afterMs: openedAt - startedAt })
                 retryCount = 0
                 setWsSender(message => nextSocket.send(JSON.stringify(message)))
+                setTransport(via)
                 setIsConnected(true)
                 setConnectionState("connected")
                 markServerReachable(`websocket #${socketId} open`)
@@ -169,14 +184,18 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
                     log.debug(`WebSocket #${socketId} closed (replaced or unmounted)`, closeInfo)
                     return
                 }
-                log.warning(`WebSocket #${socketId} closed`, closeInfo)
-                if (openedAt === null && isWebsocketRefusedForOrigin(serverStatusRef.current)) {
+                log.warning(`WebSocket #${socketId} closed`, { ...closeInfo, via })
+                if (via === "relay" && !isWebSocketRelayUsable()) {
+                    log.warning("The app's webOS service is missing; using the page's own WebSocket from now on")
+                }
+                else if (openedAt === null && via === "browser" && isWebsocketRefusedForOrigin(serverStatusRef.current)) {
                     log.warning("The server refuses this app's WebSocket: it has no password and the page's origin is null")
                 }
                 setLastClose({ code: event.code, reason: event.reason })
 
                 socket = null
                 setWsSender(null)
+                setTransport(null)
                 setIsConnected(false)
                 setConnectionState("disconnected")
                 degradeServerReachability(`websocket #${socketId} closed (code ${event.code})`)
@@ -211,7 +230,7 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
             setWsSender(null)
             socket?.close()
         }
-    }, [manualOffline, serverAuthToken, serverUrl, serverUrlProtocol, setConnectionState, setIsConnected, setLastClose])
+    }, [manualOffline, serverAuthToken, serverUrl, serverUrlProtocol, setConnectionState, setIsConnected, setLastClose, setTransport])
 
     return children
 }

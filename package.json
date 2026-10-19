@@ -135,7 +135,8 @@
     "core-js-compat": "^3.50.0",
     "esbuild": "^0.28.2",
     "lightningcss": "^1.33.0",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "ws": "^7.5.13"
   },
   "expo": {
     "install": {

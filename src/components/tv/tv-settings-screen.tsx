@@ -4,6 +4,7 @@ import {
     WEBSOCKET_NEEDS_PASSWORD_MESSAGE,
     websocketConnectionStateAtom,
     websocketLastCloseAtom,
+    websocketTransportAtom,
 } from "@/api/components/websocket-provider"
 import { API_ENDPOINTS } from "@/api/generated/endpoints"
 import { useCurrentUser, useServerStatus, useServerUrl } from "@/atoms/server.atoms"
@@ -407,10 +408,11 @@ export function TVSettingsScreen() {
     const deviceSummary = useDeviceSummary()
     const socketState = useAtomValue(websocketConnectionStateAtom)
     const socketLastClose = useAtomValue(websocketLastCloseAtom)
+    const socketTransport = useAtomValue(websocketTransportAtom)
     const serverStatus = useServerStatus()
     // Torrent and debrid streams are started and followed over the websocket.
     const liveUpdatesDetail = socketState === "connected"
-        ? "Connected"
+        ? socketTransport === "relay" ? "Connected through the app's relay service" : "Connected"
         : isWebsocketRefusedForOrigin(serverStatus)
             ? `Refused by the server. ${WEBSOCKET_NEEDS_PASSWORD_MESSAGE}`
             : `Not connected${socketLastClose ? ` (closed with code ${socketLastClose.code}${socketLastClose.reason ? `: ${socketLastClose.reason}` : ""})` : ""}. Torrent and debrid streams need it.`
