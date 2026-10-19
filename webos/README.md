@@ -184,6 +184,38 @@ are released, so a long seek doesn't continue when you come back.
 - The real answers of the Luna calls on each webOS version, and ACG enforcement on webOS 26.
 - Whether `mediaOption` resumes faster on a TV (see Resuming).
 
+## Debug logs
+
+A TV has no clipboard or share sheet, so Settings › **Diagnostics** keeps logs on the TV
+and can stream them to a computer on the same network:
+
+1. On the computer, in this repository, run:
+   ```bash
+   npm run debug:logs
+   ```
+   It prints the addresses to use (port 8787) and writes everything it receives to
+   `debug-logs/tenji-<date>.log`. Let Node through the firewall if Windows asks.
+2. On the TV, open Settings › Diagnostics and turn on **Debug Logging**.
+3. Open **Log Receiver** and enter the computer's address, e.g. `192.168.1.20` (the port
+   defaults to 8787). The TV sends a test request and shows whether it got through.
+4. Reproduce the problem. Lines appear in the terminal as they happen. **Send Saved Logs**
+   sends everything saved on the TV so far, including what was logged before a receiver
+   was set; the receiver skips lines it already has.
+
+The TV keeps the last 1,500 entries while logging is on, across restarts. Tokens and
+passwords are replaced with `[redacted]` before logs leave the TV. **Test Connection** asks
+the server for `/api/v1/status` and logs the result. The text under it shows what the app
+thinks of the server (`reachable`, `unknown`, which shows as "Checking server", or
+`unreachable`), the network, the WebSocket, and what last changed that state.
+
+The connection is logged at each step: NetInfo, every change to the server state and what
+caused it, every WebSocket attempt with its close code and how long it stayed open, every
+request's status and time, and the app being suspended, resumed or relaunched. The same
+switch exists on phones under Profile › Logs.
+
+With Developer Mode, `ares-inspect --device tv --app app.seanime.tenji --open` also opens
+Chrome DevTools on the running app.
+
 ## Developing
 
 ```bash

@@ -1,18 +1,35 @@
+import { buildSeaQuery } from "@/api/client/requests"
+import { websocketConnectionStateAtom } from "@/api/components/websocket-provider"
+import { API_ENDPOINTS } from "@/api/generated/endpoints"
 import { useCurrentUser, useServerUrl } from "@/atoms/server.atoms"
 import { TVConfirmDrawer } from "@/components/tv/tv-confirm-drawer"
+import { TVDebugLogReceiverDrawer } from "@/components/tv/tv-debug-log-receiver-drawer"
 import { usePreferredFocus, useTVFocus } from "@/components/tv/tv-focus"
 import { TV, tvSize } from "@/components/tv/tv-scale"
+import { getConnectionSnapshot, getLastConnectionChange, subscribeToConnectionState } from "@/lib/connection-state"
+import { getDebugLogReceiverLastError, getDebugLogReceiverUrl, sendToDebugLogReceiver, setDebugLogReceiverUrl } from "@/lib/debug-log-receiver"
 import { useServerConnectionState } from "@/lib/offline"
+import {
+    clearOfflineLogs,
+    getOfflineLogEntries,
+    getOfflineLogEntriesForExport,
+    isOfflineLoggingEnabled,
+    setOfflineLoggingEnabled,
+} from "@/lib/offline-logger"
 import { checkForOtaUpdateManually, getOtaVersionInfo } from "@/lib/ota/updates"
+import { logger } from "@/lib/utils/logger"
 import { toast } from "@/lib/utils/toast"
 import { useDeviceSummary } from "@/lib/webos/use-device-summary"
 import Ionicons from "@expo/vector-icons/Ionicons"
 import { Image } from "expo-image"
 import { router } from "expo-router"
+import { useAtomValue } from "jotai"
 import * as React from "react"
 import { ActivityIndicator, Animated, Platform, Pressable, ScrollView, Text, View } from "react-native"
 
-type Confirm = "server" | "cache" | null
+type Confirm = "server" | "cache" | "clear-logs" | null
+
+const diagnosticsLog = logger("diagnostics")
 
 function SectionCard({
     title,
@@ -174,6 +191,205 @@ function Divider() {
 }
 
 const noop = () => {}
+
+function StatePill({ on }: { on: boolean }) {
+    return (
+        <View
+            style={{
+                paddingHorizontal: tvSize(12),
+                paddingVertical: tvSize(4),
+                borderRadius: tvSize(999),
+                backgroundColor: on ? "rgba(134,239,172,0.15)" : "rgba(255,255,255,0.06)",
+            }}
+        >
+            <Text
+                className="font-semibold"
+                style={{ fontSize: tvSize(15), color: on ? "#86efac" : "rgba(255,255,255,0.45)" }}
+            >
+                {on ? "On" : "Off"}
+            </Text>
+        </View>
+    )
+}
+
+function timeAgo(at: number, now: number) {
+    const seconds = Math.max(0, Math.round((now - at) / 1000))
+    if (seconds < 60) return `${seconds}s ago`
+    const minutes = Math.round(seconds / 60)
+    return minutes < 60 ? `${minutes}m ago` : `${Math.round(minutes / 60)}h ago`
+}
+
+/**
+ * Debug logging for TVs, which have no clipboard or share sheet: logs are kept on the
+ * TV and can be streamed to `npm run debug:logs` on a computer.
+ */
+function DiagnosticsSection({ onClearLogs }: { onClearLogs: () => void }) {
+    const serverUrl = useServerUrl()
+    const snapshot = React.useSyncExternalStore(subscribeToConnectionState, getConnectionSnapshot)
+    const websocketState = useAtomValue(websocketConnectionStateAtom)
+    const [loggingEnabled, setLoggingEnabled] = React.useState(isOfflineLoggingEnabled)
+    const [entryCount, setEntryCount] = React.useState(() => getOfflineLogEntries().length)
+    const [receiverUrl, setReceiverUrl] = React.useState(getDebugLogReceiverUrl)
+    const [receiverError, setReceiverError] = React.useState(getDebugLogReceiverLastError)
+    const [receiverOpen, setReceiverOpen] = React.useState(false)
+    const [sending, setSending] = React.useState(false)
+    const [testing, setTesting] = React.useState(false)
+    const receiverRef = React.useRef<RowRef>(null)
+
+    // the entry count, receiver errors and "12s ago" change without any React state
+    // changing; `now` is state so the React Compiler doesn't cache the "ago" text
+    const [now, setNow] = React.useState(Date.now)
+    React.useEffect(() => {
+        const timer = setInterval(() => {
+            setEntryCount(getOfflineLogEntries().length)
+            setReceiverError(getDebugLogReceiverLastError())
+            setNow(Date.now())
+        }, 2000)
+        return () => clearInterval(timer)
+    }, [])
+
+    const toggleLogging = React.useCallback(() => {
+        const next = !loggingEnabled
+        setOfflineLoggingEnabled(next)
+        setLoggingEnabled(next)
+        setEntryCount(getOfflineLogEntries().length)
+        toast.info(next ? "Debug logging on" : "Debug logging off")
+    }, [loggingEnabled])
+
+    const saveReceiver = React.useCallback((url: string | null) => {
+        setDebugLogReceiverUrl(url)
+        setReceiverUrl(url)
+        setReceiverError(null)
+        if (!url) {
+            toast.info("Stopped sending logs")
+            return
+        }
+        void sendToDebugLogReceiver([], url).then(result => {
+            if (result.ok) toast.success(`Log receiver reached at ${url}`)
+            else toast.error(`Can't reach ${url}: ${result.error}`)
+            setReceiverError(result.ok ? null : result.error)
+        })
+    }, [])
+
+    const sendSavedLogs = React.useCallback(() => {
+        if (sending) return
+        setSending(true)
+        void sendToDebugLogReceiver(getOfflineLogEntriesForExport())
+            .then(result => {
+                if (result.ok) toast.success(result.sent === 1 ? "Sent 1 log entry" : `Sent ${result.sent} log entries`)
+                else toast.error(`Couldn't send logs: ${result.error}`)
+                setReceiverError(result.ok ? null : result.error)
+            })
+            .finally(() => setSending(false))
+    }, [sending])
+
+    const testConnection = React.useCallback(() => {
+        if (testing || !serverUrl) return
+        setTesting(true)
+        const startedAt = Date.now()
+        const current = getConnectionSnapshot()
+        diagnosticsLog.info("Connection test started", {
+            server: current.serverReachability,
+            network: current.hasNetwork,
+            websocket: websocketState,
+            lastChange: getLastConnectionChange(),
+        })
+        void buildSeaQuery({
+            serverUrl,
+            endpoint: API_ENDPOINTS.STATUS.GetStatus.endpoint,
+            method: "GET",
+            muteError: true,
+            bypassOfflineCheck: true,
+        })
+            .then(() => {
+                const durationMs = Date.now() - startedAt
+                diagnosticsLog.info("Connection test passed", { durationMs })
+                toast.success(`Server answered in ${durationMs} ms`)
+            })
+            .catch((error: { error?: string, status?: number }) => {
+                diagnosticsLog.warning("Connection test failed", {
+                    status: error?.status ?? null,
+                    error: error?.error ?? String(error),
+                })
+                toast.error(`Server test failed: ${error?.error ?? "unknown error"}`)
+            })
+            .finally(() => setTesting(false))
+    }, [serverUrl, testing, websocketState])
+
+    // changes only together with the snapshot
+    const lastChange = React.useMemo(() => {
+        void snapshot
+        return getLastConnectionChange()
+    }, [snapshot])
+    const connectionDetail = [
+        `server ${snapshot.serverReachability}`,
+        `network ${snapshot.hasNetwork ? "up" : "down"}`,
+        `socket ${websocketState}`,
+        lastChange ? `${lastChange.source}, ${timeAgo(lastChange.at, now)}` : null,
+    ].filter(Boolean).join(" · ")
+
+    return (
+        <SectionCard title="Diagnostics">
+            <SettingsRow
+                label="Debug Logging"
+                detail={loggingEnabled
+                    ? `${entryCount} ${entryCount === 1 ? "entry" : "entries"} saved on this TV`
+                    : "Turn on, reproduce the problem, then send the logs"}
+                icon="bug-outline"
+                onPress={toggleLogging}
+                trailing={<StatePill on={loggingEnabled} />}
+            />
+            <Divider />
+            <SettingsRow
+                ref={receiverRef}
+                label="Log Receiver"
+                detail={receiverUrl
+                    ? receiverError ? `${receiverUrl} · ${receiverError}` : `Sending live to ${receiverUrl}`
+                    : "Not set · run npm run debug:logs on a computer"}
+                icon="desktop-outline"
+                onPress={() => setReceiverOpen(true)}
+            />
+            <Divider />
+            <SettingsRow
+                label={sending ? "Sending Logs…" : "Send Saved Logs"}
+                detail={receiverUrl ? `All ${entryCount} saved entries to the receiver` : "Set a log receiver first"}
+                icon="cloud-upload-outline"
+                disabled={!receiverUrl || sending}
+                onPress={sendSavedLogs}
+                trailing={sending ? <ActivityIndicator size="small" color="white" /> : undefined}
+                showChevron={false}
+            />
+            <Divider />
+            <SettingsRow
+                label={testing ? "Testing Connection…" : "Test Connection"}
+                detail={connectionDetail}
+                icon="pulse-outline"
+                disabled={!serverUrl || testing}
+                onPress={testConnection}
+                trailing={testing ? <ActivityIndicator size="small" color="white" /> : undefined}
+                showChevron={false}
+            />
+            <Divider />
+            <SettingsRow
+                label="Clear Logs"
+                detail="Remove the logs saved on this TV"
+                icon="trash-outline"
+                onPress={onClearLogs}
+                showChevron={false}
+            />
+
+            <TVDebugLogReceiverDrawer
+                open={receiverOpen}
+                onOpenChange={open => {
+                    setReceiverOpen(open)
+                    if (!open) focusRow(receiverRef)
+                }}
+                currentUrl={receiverUrl}
+                onSave={saveReceiver}
+            />
+        </SectionCard>
+    )
+}
 
 export function TVSettingsScreen() {
     const serverUrl = useServerUrl()
@@ -344,6 +560,8 @@ export function TVSettingsScreen() {
                         />
                     </SectionCard>
 
+                    <DiagnosticsSection onClearLogs={() => setConfirm("clear-logs")} />
+
                     {/* webOS only: what the TV reports about itself, for bug reports */}
                     {deviceSummary && (
                         <SectionCard title="Device">
@@ -383,6 +601,20 @@ export function TVSettingsScreen() {
                 confirmLabel="Clear cache"
                 danger
                 onConfirm={clearCache}
+            />
+            <TVConfirmDrawer
+                open={confirm === "clear-logs"}
+                onOpenChange={open => {
+                    if (!open) setConfirm(null)
+                }}
+                title="Clear logs?"
+                text="Diagnostic logs and crash records saved on this TV will be removed."
+                confirmLabel="Clear logs"
+                danger
+                onConfirm={() => {
+                    clearOfflineLogs()
+                    toast.success("Logs cleared")
+                }}
             />
             <TVConfirmDrawer
                 open={confirm === "server"}
