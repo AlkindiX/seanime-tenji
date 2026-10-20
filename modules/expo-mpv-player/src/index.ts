@@ -15,6 +15,7 @@ export type {
     MpvVideoSource,
     MpvExternalSubtitle,
     MpvMediaInfoSummary,
+    MpvSourceAudioTrack,
     MpvStreamedSubtitles,
     MpvStreamedSubtitleTrack,
     MpvStreamedSubtitleLine,

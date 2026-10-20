@@ -144,6 +144,8 @@ export function useMpvPlayer() {
         if (playbackPlan.streamedSubtitles) videoSource.streamedSubtitles = playbackPlan.streamedSubtitles
         if (playbackPlan.onMediaEvent) videoSource.onMediaEvent = playbackPlan.onMediaEvent
         if (playbackPlan.subtitleFonts?.length) videoSource.subtitleFonts = playbackPlan.subtitleFonts
+        if (playbackPlan.audioTracks?.length) videoSource.audioTracks = playbackPlan.audioTracks
+        if (playbackPlan.onAudioTrackFallback) videoSource.onAudioTrackFallback = playbackPlan.onAudioTrackFallback
         if (!prefs.assRendering) videoSource.assRendering = false
         return videoSource
     }, [playbackPlan, source])
@@ -403,6 +405,7 @@ export function useMpvPlayer() {
                 language: t.lang,
                 codec: t.codec,
                 selected: t.selected,
+                unplayable: t.unplayable,
             }))
             const mappedChapters = (rawChapters || []).map(c => ({
                 id: c.id,
@@ -494,7 +497,8 @@ export function useMpvPlayer() {
         hasAppliedDefaultTracks.current = true
         const prefs = getPlayerPreferences()
 
-        const preferredAudio = findPreferredTrack(state.audioTracks, prefs.preferredAudioLanguages)
+        // Not a track the TV plays no sound for (the web player has left it already).
+        const preferredAudio = findPreferredTrack(state.audioTracks.filter(track => !track.unplayable), prefs.preferredAudioLanguages)
         if (preferredAudio !== null) {
             const currentAudio = state.audioTracks.find(t => t.selected)
             if (currentAudio?.id !== preferredAudio) {

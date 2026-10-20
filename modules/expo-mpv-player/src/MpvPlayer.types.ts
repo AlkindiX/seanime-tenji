@@ -54,6 +54,27 @@ export type MpvVideoSource = {
     subtitleFonts?: string[]
     /** Draw ASS subtitles with libass (default) or as plain text lines; `setAssRendering` changes it later. */
     assRendering?: boolean
+    /**
+     * The file's audio tracks as the server describes them, in file order. The
+     * web player names the browser's tracks with them and, when the TV starts
+     * on one it plays no sound for, switches to one it plays.
+     */
+    audioTracks?: MpvSourceAudioTrack[]
+    /** Called when the web player left an audio track the TV plays no sound for. */
+    onAudioTrackFallback?: (from: MpvSourceAudioTrack, to: MpvSourceAudioTrack) => void
+}
+
+/** An audio track of the file as the app knows it, and how the TV takes it. */
+export type MpvSourceAudioTrack = {
+    /** Codec and channels, as shown with the track: "FLAC 5.1". */
+    codec: string
+    language?: string
+    title?: string
+    default?: boolean
+    /** plays: the TV plays it. risky: it may not. broken: known to give no or partial sound. */
+    support: "plays" | "risky" | "broken"
+    /** The TV leaves it out of the browser's audio tracks (TrueHD on webOS). */
+    unlisted?: boolean
 }
 
 export type MpvStreamedSubtitleTrack = {
@@ -170,6 +191,8 @@ export type AudioTrack = {
     codec?: string
     channels?: number
     selected: boolean
+    /** Web player: a track the TV is known to play no (or partial) sound for. */
+    unplayable?: boolean
 }
 
 export type MpvChapter = {

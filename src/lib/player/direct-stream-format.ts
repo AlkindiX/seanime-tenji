@@ -2,8 +2,10 @@
  * What a Seanime direct stream sends, in the shapes the web player takes.
  * Kept free of React Native so the tests can load it.
  */
-import type { MKVParser_Metadata, MKVParser_SubtitleEvent, NativePlayer_SubtitleEventsPayload } from "@/api/generated/types"
+import type { MKVParser_Metadata, MKVParser_SubtitleEvent, MKVParser_TrackInfo, NativePlayer_SubtitleEventsPayload } from "@/api/generated/types"
 import type { MpvStreamedSubtitleLine, MpvSubtitleImage } from "expo-mpv-player"
+import { h264ProfileProblem } from "../webos/playback-capabilities.ts"
+import { describeTVAudioTrack, mkvAudioCodec, type TVAudioTrack } from "../webos/tv-audio.ts"
 
 /** How long an image subtitle stays up when the server sends no duration. */
 const IMAGE_FALLBACK_DURATION_MS = 5000
@@ -86,46 +88,96 @@ const VIDEO_CODECS: Array<[RegExp, string]> = [
     [/^V_MPEG2/, "MPEG-2"],
 ]
 
-const AUDIO_CODECS: Array<[RegExp, string]> = [
-    [/^A_AAC/, "AAC"],
-    [/^A_EAC3/, "E-AC-3"],
-    [/^A_AC3/, "AC-3"],
-    [/^A_DTS/, "DTS"],
-    [/^A_TRUEHD/, "TrueHD"],
-    [/^A_FLAC/, "FLAC"],
-    [/^A_OPUS/, "Opus"],
-    [/^A_VORBIS/, "Vorbis"],
-    [/^A_MPEG\/L3/, "MP3"],
-    [/^A_PCM/, "PCM"],
-]
+function videoCodecName(codecId: string) {
+    return VIDEO_CODECS.find(([pattern]) => pattern.test(codecId))?.[1] ?? codecId.replace(/^V_/, "")
+}
 
 /**
- * Audio LG TVs don't play inside a video file, or only on some models; the
- * TV's player then tends to load forever. LG lists FLAC only as a music
- * format, and DTS for "specific models only".
+ * What the TV's decoder can't take about a video track, read from its
+ * CodecPrivate (the decoder configuration record). The server sends it as a
+ * string; its first bytes are below 0x80 and come through as they are.
  */
-const RISKY_AUDIO = new Set(["FLAC", "Vorbis", "TrueHD", "DTS"])
-
-function codecName(codecId: string, table: Array<[RegExp, string]>) {
-    return table.find(([pattern]) => pattern.test(codecId))?.[1] ?? codecId.replace(/^[AV]_/, "")
+export function videoTrackProblem(track: Pick<MKVParser_TrackInfo, "codecID" | "codecPrivate"> | undefined): string | null {
+    const config = track?.codecPrivate
+    // configurationVersion is 1 in both AVC and HEVC records.
+    if (!track || !config || config.length < 2 || config.charCodeAt(0) !== 1) return null
+    const second = config.charCodeAt(1)
+    if (second > 0x7f) return null
+    if (/^V_MPEG4\/ISO\/AVC/.test(track.codecID)) return h264ProfileProblem(second)
+    // general_profile_idc 4: range extensions (4:2:2, 4:4:4, 12-bit), beyond Main and Main10.
+    if (/^V_MPEGH\/ISO\/HEVC/.test(track.codecID) && (second & 0x1f) === 4) return "HEVC 4:2:2/4:4:4 or 12-bit"
+    return null
 }
 
 export type StreamCodecs = {
+    /** "HEVC", or what the TV can't decode about it ("10-bit H.264 (Hi10P)"). */
     video?: string
     resolution?: string
+    /** Each kind of audio track once: "FLAC 5.1", "AAC 2.0". */
     audio: string[]
-    /** Audio in the file this TV may not play. */
+    /** Audio the TV may not play, named when no track of the file is one it plays. */
     riskyAudio: string[]
+    /** What the TV's decoders don't handle about the video. */
+    videoProblems: string[]
+    /** The file's audio tracks in file order, for the web player. */
+    audioTracks: TVAudioTrack[]
 }
 
 export function describeStreamCodecs(metadata: MKVParser_Metadata | undefined): StreamCodecs {
     const video = metadata?.videoTracks?.[0]
-    const audio = Array.from(new Set((metadata?.audioTracks ?? []).map(track => codecName(track.codecID, AUDIO_CODECS))))
+    const audioTracks = (metadata?.audioTracks ?? []).map(track => describeTVAudioTrack({
+        codec: mkvAudioCodec(track.codecID),
+        channels: track.audio?.Channels || undefined,
+        language: track.languageIETF || track.language,
+        title: track.name,
+        default: track.default,
+    }))
+    const unique = (labels: string[]) => Array.from(new Set(labels))
+    const anyPlays = audioTracks.some(track => track.support === "plays")
+    const problem = videoTrackProblem(video)
     const size = video?.video
     return {
-        video: video ? codecName(video.codecID, VIDEO_CODECS) : undefined,
+        video: problem ?? (video ? videoCodecName(video.codecID) : undefined),
         resolution: size?.PixelWidth && size.PixelHeight ? `${size.PixelWidth}×${size.PixelHeight}` : undefined,
-        audio,
-        riskyAudio: audio.filter(name => RISKY_AUDIO.has(name)),
+        audio: unique(audioTracks.map(track => track.codec)),
+        riskyAudio: anyPlays ? [] : unique(audioTracks.filter(track => track.support !== "plays").map(track => track.codec)),
+        videoProblems: problem ? [problem] : [],
+        audioTracks,
     }
+}
+
+const hasFlac = (labels: string[]) => labels.some(label => label.startsWith("FLAC"))
+
+/** A warning for the start of a stream whose audio the TV may not play, or null. */
+export function streamAudioWarning(codecs: StreamCodecs): string | null {
+    if (codecs.riskyAudio.length === 0) return null
+    const what = `This TV may not play ${codecs.riskyAudio.join(" or ")} audio`
+    const multichannelFlac = codecs.audioTracks.some(track => track.support === "broken" && track.codec.startsWith("FLAC"))
+    return multichannelFlac
+        ? `${what}: LG TVs often play FLAC with more than two channels silently. If there's no sound, pick a release with AAC, AC-3 or E-AC-3 audio.`
+        : `${what}. If the video doesn't start, pick a release with AAC, AC-3 or E-AC-3 audio.`
+}
+
+/**
+ * The error for a torrent or debrid stream the TV could not play: what is
+ * in it, what LG's decoders don't take, and what to do. The server
+ * (Seanime 3.10) transcodes library files only.
+ */
+export function streamFailureMessage(codecs: StreamCodecs): string {
+    const what = [codecs.video, ...codecs.audio].filter(Boolean).join(", ")
+    const parts = [`The TV could not play this stream${what ? ` (${what})` : ""}.`]
+    if (codecs.videoProblems.length > 0) parts.push(`LG TVs don't decode ${codecs.videoProblems.join(" or ")}.`)
+    if (hasFlac(codecs.riskyAudio)) {
+        parts.push("LG lists FLAC for music files only, and many LG TVs don't play it in a video.")
+    } else if (codecs.riskyAudio.length > 0) {
+        parts.push(`LG TVs may not play ${codecs.riskyAudio.join(" or ")} audio in a video.`)
+    }
+
+    const wanted: string[] = []
+    if (codecs.videoProblems.length > 0) wanted.push("8-bit H.264 or HEVC video")
+    if (codecs.riskyAudio.length > 0) wanted.push("AAC, AC-3 or E-AC-3 audio")
+    const marked = hasFlac(codecs.riskyAudio) ? " (the release list marks FLAC ones)" : ""
+    parts.push(`Seanime can't transcode torrent or debrid streams, so pick another release${wanted.length ? ` with ${wanted.join(" and ")}` : ""}${marked}.`)
+    parts.push("Or download the episode to your library from Seanime's web interface: the server can transcode library files.")
+    return parts.join(" ")
 }

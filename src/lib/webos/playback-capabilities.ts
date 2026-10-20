@@ -9,6 +9,7 @@
  *
  * No react-native imports, so the node tests can load it.
  */
+import { audioTrackLabel, tvAudioSupport, unlistedOnWebOS } from "./tv-audio.ts"
 
 /** The parts of the server's `MediaInfo` this module reads. */
 export type PlaybackMediaInfo = {
@@ -19,7 +20,7 @@ export type PlaybackMediaInfo = {
         height?: number
         pixFmt?: string
     } | null
-    audios?: Array<{ codec: string; mimeCodec?: string | null; channels?: number }> | null
+    audios?: Array<{ codec: string; mimeCodec?: string | null; channels?: number; isDefault?: boolean }> | null
 }
 
 /** What the browser says it can decode (MediaSource.isTypeSupported / canPlayType). */
@@ -124,6 +125,11 @@ const H264_UNSUPPORTED_PROFILES: Record<number, string> = {
     0xF4: "H.264 High 4:4:4",
 }
 
+/** What the TV can't decode about an H.264 profile (profile_idc), or null. */
+export function h264ProfileProblem(profileIdc: number | null | undefined) {
+    return profileIdc !== null && profileIdc !== undefined ? H264_UNSUPPORTED_PROFILES[profileIdc] ?? null : null
+}
+
 function isDolbyVision(mimeCodec: string | null | undefined, codec: string) {
     return /^(dvhe|dvh1|dvav|dva1|dav1)\b/i.test(mimeCodec ?? "") || /^(dvhe|dvh1)$/i.test(codec)
 }
@@ -186,8 +192,18 @@ export function decidePlayback(
         }
     }
 
+    // The track the TV starts on, when it plays no sound for it (FLAC with
+    // more than two channels): the transcode turns every track into AAC.
+    // webOS leaves TrueHD out and starts on another track, if there is one.
+    const audios = mediaInfo?.audios ?? []
+    const start = audios.find(audio => audio.isDefault) ?? audios[0]
+    if (start?.codec && tvAudioSupport(start.codec, start.channels) === "broken") {
+        const another = audios.some(audio => audio !== start && !!audio.codec && tvAudioSupport(audio.codec, audio.channels) !== "broken")
+        if (!(unlistedOnWebOS(start.codec) && another)) reasons.push(`${audioTrackLabel(start.codec, start.channels)} audio`)
+    }
+
     const seen = new Set<string>()
-    for (const audio of mediaInfo?.audios ?? []) {
+    for (const audio of audios) {
         const codec = audio.codec?.toLowerCase()
         if (!codec || seen.has(codec)) continue
         seen.add(codec)

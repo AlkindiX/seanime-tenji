@@ -8,6 +8,7 @@ import {
     HibikeTorrent_AnimeTorrent,
     Torrentstream_FilePreview,
 } from "@/api/generated/types"
+import { releaseAudioProblem } from "@/components/features/torrentstream/release-audio"
 import { getFileSelectionValue, isSameTorrent } from "@/components/features/torrentstream/torrent-stream-picker-utils"
 import {
     TORRENT_RESOLUTIONS,
@@ -22,7 +23,7 @@ import type { TVInputHandle } from "@/components/tv/tv-input"
 import { ROW_OVERFLOW, tvSize } from "@/components/tv/tv-scale"
 import { Ionicons } from "@expo/vector-icons"
 import * as React from "react"
-import { Animated, FlatList, Pressable, ScrollView, Text, TVFocusGuideView, View } from "react-native"
+import { Animated, FlatList, Platform, Pressable, ScrollView, Text, TVFocusGuideView, View } from "react-native"
 
 type TVTorrentStreamPickerDrawerProps = {
     open: boolean;
@@ -812,6 +813,9 @@ const TVTorrentCard = React.memo(function TVTorrentCard({
         onSelect(torrent);
     }, [onSelect, torrent]);
 
+    // webOS: LG TVs may not play FLAC in a video, and the server can't transcode a stream.
+    const audioProblem = Platform.OS === "web" ? releaseAudioProblem(torrent.name, metadata) : null;
+
     const displayReleaseGroup = torrent.releaseGroup || "";
     const displayResolution = torrent.resolution || "";
 
@@ -986,6 +990,37 @@ const TVTorrentCard = React.memo(function TVTorrentCard({
                                 }}
                             >
                                 Highest quality
+                            </Text>
+                        </View>
+                    )}
+
+                    {audioProblem && (
+                        <View
+                            accessible
+                            accessibilityLabel={`${audioProblem} audio, may not play on this TV`}
+                            style={{
+                                backgroundColor: "rgba(146,64,14,0.72)",
+                                paddingHorizontal: tvSize(8),
+                                paddingVertical: tvSize(2),
+                                borderRadius: tvSize(6),
+                                flexDirection: "row",
+                                alignItems: "center",
+                                gap: tvSize(4),
+                            }}
+                        >
+                            <Ionicons
+                                name="warning"
+                                size={tvSize(11)}
+                                color="#fde68a"
+                            />
+                            <Text
+                                style={{
+                                    fontSize: tvSize(12),
+                                    fontWeight: "bold",
+                                    color: "#fde68a",
+                                }}
+                            >
+                                {audioProblem}
                             </Text>
                         </View>
                     )}

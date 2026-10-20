@@ -84,16 +84,31 @@ test("streamed ASS lines keep their rows and take the style's alignment", () => 
 })
 
 test("stream codecs name the audio an LG TV may not play", () => {
-    const codecs = describeStreamCodecs({
-        duration: 1,
-        timecodeScale: 1000000,
-        videoTracks: [{ number: 1, uid: 1, type: "video", codecID: "V_MPEGH/ISO/HEVC", default: true, forced: false, enabled: true, video: { PixelWidth: 1920, PixelHeight: 1080 } }],
+    const hevc = { number: 1, uid: 1, type: "video" as const, codecID: "V_MPEGH/ISO/HEVC", default: true, forced: false, enabled: true, video: { PixelWidth: 1920, PixelHeight: 1080 } }
+    const flac = { number: 2, uid: 2, type: "audio" as const, codecID: "A_FLAC", language: "jpn", default: true, forced: false, enabled: true, audio: { SamplingFrequency: 48000, Channels: 2, BitDepth: 24 } }
+    const aac = { number: 3, uid: 3, type: "audio" as const, codecID: "A_AAC", language: "eng", name: "English", default: false, forced: false, enabled: true, audio: { SamplingFrequency: 48000, Channels: 2, BitDepth: 0 } }
+    const metadata = { duration: 1, timecodeScale: 1000000, videoTracks: [hevc], audioTracks: [flac, aac] }
+
+    // A track the TV plays is there: nothing to warn about.
+    assert.deepEqual(describeStreamCodecs(metadata), {
+        video: "HEVC",
+        resolution: "1920×1080",
+        audio: ["FLAC 2.0", "AAC 2.0"],
+        riskyAudio: [],
+        videoProblems: [],
         audioTracks: [
-            { number: 2, uid: 2, type: "audio", codecID: "A_FLAC", default: true, forced: false, enabled: true },
-            { number: 3, uid: 3, type: "audio", codecID: "A_AAC", default: false, forced: false, enabled: true },
+            { codec: "FLAC 2.0", language: "jpn", title: undefined, default: true, support: "risky" },
+            { codec: "AAC 2.0", language: "eng", title: "English", default: undefined, support: "plays" },
         ],
     })
 
-    assert.deepEqual(codecs, { video: "HEVC", resolution: "1920×1080", audio: ["FLAC", "AAC"], riskyAudio: ["FLAC"] })
-    assert.deepEqual(describeStreamCodecs(undefined), { video: undefined, resolution: undefined, audio: [], riskyAudio: [] })
+    // FLAC alone is named; with more than two channels it is known to play silently.
+    const surround = { ...flac, audio: { ...flac.audio, Channels: 6 } }
+    const flacOnly = describeStreamCodecs({ ...metadata, audioTracks: [surround] })
+    assert.deepEqual(flacOnly.riskyAudio, ["FLAC 5.1"])
+    assert.equal(flacOnly.audioTracks[0].support, "broken")
+
+    assert.deepEqual(describeStreamCodecs(undefined), {
+        video: undefined, resolution: undefined, audio: [], riskyAudio: [], videoProblems: [], audioTracks: [],
+    })
 })

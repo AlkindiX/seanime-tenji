@@ -10,7 +10,7 @@ import type {
     Onlinestream_VideoSource,
 } from "@/api/generated/types"
 import type { ServerLocalIdentity } from "@/lib/offline/server-local-store"
-import type { MpvChapter, MpvExternalSubtitle, MpvMediaEvent, MpvMediaInfoSummary, MpvStreamedSubtitles } from "expo-mpv-player"
+import type { MpvChapter, MpvExternalSubtitle, MpvMediaEvent, MpvMediaInfoSummary, MpvSourceAudioTrack, MpvStreamedSubtitles } from "expo-mpv-player"
 
 ///////////////////////////////////////////////////////////////////////////////
 // Mobile playback source
@@ -143,6 +143,9 @@ export type WebPlaybackPlan = {
     onMediaEvent?: (event: MpvMediaEvent) => void
     /** Fonts the file carries, for drawing its ASS subtitles with libass. */
     subtitleFonts?: string[]
+    /** The file's audio tracks and how the TV takes them, so the player can leave one it plays no sound for. */
+    audioTracks?: MpvSourceAudioTrack[]
+    onAudioTrackFallback?: (from: MpvSourceAudioTrack, to: MpvSourceAudioTrack) => void
     /**
      * Called when the player reports an error. `true`: handled, a new plan
      * is on its way. A string: the message to show instead. `null`: nothing
@@ -165,6 +168,8 @@ export type PlayerTrack = {
     language?: string
     codec?: string
     selected: boolean
+    /** Web player: the TV is known to play no (or partial) sound for this audio track. */
+    unplayable?: boolean
 }
 
 export type PlayerChapter = {

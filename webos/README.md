@@ -86,8 +86,10 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   - It plays the file as it is (*direct play*) unless it knows the TV can't. Files it
     sends to the server's transcoder instead: **10-bit H.264 (Hi10P)**, common in anime
     BD encodes, and H.264 4:2:2/4:4:4, which LG's decoders don't support; 12-bit or 4:2:2
-    HEVC; Dolby Vision on a TV without it; 4K on a Full HD TV; and an unusual codec the
-    browser says it can't decode. A toast says why ("Transcoding: this TV can't play
+    HEVC; Dolby Vision on a TV without it; 4K on a Full HD TV; an unusual codec the
+    browser says it can't decode; and a file whose default audio track is FLAC with more
+    than two channels, which LG TVs play silently (see FLAC audio below), or TrueHD with
+    no other track to fall back on. A toast says why ("Transcoding: this TV can't play
     10-bit H.264 (Hi10P)").
   - If a direct-played file still fails to decode, Tenji switches to transcoding once and
     carries on from the same position.
@@ -102,13 +104,41 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   - Audio the browser says it can't play (e.g. DTS, TrueHD, sometimes Opus or FLAC) only
     gives a warning: the TV's file player often plays what its MSE check refuses.
   - Torrent, debrid and online streams play as they are; the server can't transcode
-    them. When the TV can't decode one, the error says so and names the file's codecs.
-    When the server answers with an HTTP error instead (an expired link, a missing file),
-    the error gives the status.
+    them (Seanime 3.10's direct stream serves the file's bytes, and its transcoder only
+    takes a file on the server's disk). When the TV can't play a torrent or debrid stream,
+    the error names what it couldn't take (10-bit H.264 is read from the video track's
+    decoder settings, FLAC from the audio tracks) and what to do: pick another release,
+    or download the episode to the library, where the server can transcode it. When the
+    server answers with an HTTP error instead (an expired link, a missing file), the error
+    gives the status.
   - A file that hasn't started after 45 seconds counts as one the TV can't play. LG's
     player can wait forever without an error, notably on audio it doesn't play inside a
-    video file: FLAC, Vorbis, TrueHD, and DTS on many models. Tenji warns when a torrent or
-    debrid stream has such audio; pick a release with AAC or AC-3 audio instead.
+    video file: Vorbis, TrueHD, DTS on many models, and FLAC on some. Tenji warns when a
+    torrent or debrid stream has no audio track the TV is known to play.
+- **FLAC audio.** LG's video specs (webOS 6 to 25) list Dolby Digital, Dolby Digital Plus,
+  AAC, PCM, DTS (some models) and MPEG audio in MKV, and FLAC only as a music file, in
+  stereo. Reported on TVs: stereo FLAC in MKV plays on a C1 and a C3 (Jellyfin
+  direct-plays it), FLAC with more than two channels plays silently or without its centre
+  channel, and a webOS 26 TV loads stereo FLAC forever. So:
+  - **Releases.** On webOS, before an auto-selected torrent or debrid stream, Tenji runs
+    the server's auto-select itself (the same searches, the auto-select profile's filters
+    and scores, cached debrid releases first). When the release it would pick mentions
+    FLAC and a comparable one doesn't (same resolution, seeded enough to stream, cached
+    if the first was), Tenji starts that one and says so; otherwise the server picks as
+    usual. If the check takes over 25 seconds or fails, the server picks. The release list
+    marks releases whose name mentions FLAC with a small amber *FLAC* badge. To make
+    Seanime itself skip FLAC releases on every device, add `FLAC` to the excluded terms of
+    its auto-select profile (Seanime's web interface).
+  - **Audio tracks.** When the TV starts on a track it plays silently (FLAC with more than
+    two channels) and the file has another one, the player switches to it, in the same
+    language if there is one, and a toast says which. The audio menu shows each track's
+    codec and marks the silent ones, and the preferred-language choice skips them.
+    Browser tracks are matched with the file's by order when the counts and languages
+    agree, else by title and language (webOS leaves out tracks it can't decode).
+  - **Library files** starting on such a track are transcoded (all tracks become AAC).
+  - Not done: decoding FLAC in the app. The TV's video element hands its audio to the
+    platform, and the alternatives (MSE with FLAC in MP4, WebCodecs) need a demuxer in the
+    app and are unverified on LG TVs.
 - **Playback stats** (Info key) show the mode (`html5 · direct play`, or
   `html5+hls.js · transcode`), the file's codecs, why it is transcoded, and the TV model.
 - **Chapters** of library files come from the server, so the seek bar shows them (and the
@@ -126,7 +156,8 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   session (a file the TV can't play at all doesn't count against it). *Not verified on
   a TV*: desktop Chromium plays the `<source>` but ignores the option, so the checks covered
   passing the position, the seek that follows and the fallback, not the speed-up.
-- **Audio tracks** can be switched when the TV exposes them, which webOS does.
+- **Audio tracks** can be switched when the TV exposes them, which webOS does (since
+  webOS 3). A track the TV plays silently is left on its own (see FLAC audio).
 - **Subtitles** are drawn by the app.
   - **ASS/SSA** are drawn by libass, as mpv does on the other builds: fonts (the ones the
     file carries, from the server), styling, signs, positioning and animation. libass runs
@@ -301,6 +332,11 @@ are released, so a long seek doesn't continue when you come back.
   authenticated) were checked but not its picture.
 - The real answers of the Luna calls on each webOS version, and ACG enforcement on webOS 26.
 - Whether `mediaOption` resumes faster on a TV (see Resuming).
+- FLAC on a TV (see FLAC audio): which FLAC streams the C3 plays, the switch away from a
+  silent track (the order and language tags webOS gives `audioTracks`, and whether it
+  takes the switch before playback starts), and that the client's auto-select picks what
+  the server would. These were checked with unit tests against the server's code, not
+  on a TV or a server.
 - libass on a TV: its speed with heavy typesetting, and loading its worker and wasm from
   `file://` (they are read with XMLHttpRequest and handed over as blob URLs, as a worker
   can't `fetch()` files). Checked in desktop Chromium over http. If it fails, subtitles

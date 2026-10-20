@@ -43,6 +43,7 @@ import {
     type StreamFilePreview,
 } from "./torrent-stream-picker-utils"
 import { batchAction } from "./previous-batch"
+import { usePlayableAutoRelease } from "./use-playable-auto-release"
 
 const log = logger("torrent-stream")
 
@@ -647,6 +648,41 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
         [clearPendingStreamState, ensureLiveConnection, entry, mediaId, resetPicker, setActiveStreamSession, setDebridStreamState, setIsPreparing, setLoadingState,
             setPendingInfo, setStreamSessionMode, startDebridStream, startTorrentStream, streamMode])
 
+    // webOS: LG TVs don't play FLAC in a video and the server can't transcode
+    // a stream, so a comparable release without it is started instead.
+    const choosePlayableAutoRelease = usePlayableAutoRelease({ entry, serverStatus, providerExtensions })
+    const checkingReleaseRef = React.useRef(false)
+    const isPreparingRef = React.useRef(isPreparingStream)
+    isPreparingRef.current = isPreparingStream
+    const startPlayableAutoSelectedStream = React.useCallback((episode: Anime_Episode, mode: StreamMode = streamMode) => {
+        if (Platform.OS !== "web") {
+            startAutoSelectedStream(episode, mode)
+            return
+        }
+        if (checkingReleaseRef.current || !episode.aniDBEpisode || !mediaId || !ensureLiveConnection()) return
+        checkingReleaseRef.current = true
+        setActiveStreamSession(toActiveStreamSession(mode, entry, episode, "Selecting best torrent..."))
+        setIsPreparing(true)
+        void choosePlayableAutoRelease(episode.episodeNumber, mode).then((choice) => {
+            checkingReleaseRef.current = false
+            // Cancelled while the releases were checked.
+            if (!isPreparingRef.current) return
+            if (!choice) {
+                startAutoSelectedStream(episode, mode)
+                return
+            }
+            log.info("Starting a release without audio the TV can't play", { avoided: choice.avoided.name, instead: choice.torrent.name })
+            toast.info(`Picked ${choice.torrent.releaseGroup || "another release"} instead of a release with ${choice.problem} audio, which LG TVs may not play.`)
+            startManualStream({ episode, torrent: choice.torrent }, mode)
+            // Still an auto-selected episode: the next one is auto-selected too.
+            setPendingInfo(info => info && {
+                ...info,
+                nextEpisodeAction: mode === "debrid" ? "debridstream-auto-select" : "torrentstream-auto-select",
+            })
+        })
+    }, [choosePlayableAutoRelease, ensureLiveConnection, entry, mediaId, setActiveStreamSession, setIsPreparing, setPendingInfo, startAutoSelectedStream,
+        startManualStream, streamMode])
+
     const buildBatchEpisodeFiles = React.useCallback((
         previews: StreamFilePreview[] | undefined,
         currentFileId: string,
@@ -739,7 +775,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
         }
 
         if (autoSelect && !episodeCollection?.hasMappingError && episode.aniDBEpisode) {
-            startAutoSelectedStream(episode, sMode)
+            startPlayableAutoSelectedStream(episode, sMode)
             return
         }
 
@@ -773,7 +809,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
         openPickerForEpisode(episode, "torrents", sMode)
     },
         [autoSelect, autoSelectFile, batchHistory?.torrent, episodeCollection?.hasMappingError, getPreviousBatchSelection, openPickerForEpisode,
-            startAutoSelectedStream, startManualStream, streamMode, usePreviousBatch, mode])
+            startPlayableAutoSelectedStream, startManualStream, streamMode, usePreviousBatch, mode])
 
     const startPreviousBatchStream = React.useCallback((episode: Anime_Episode, mode: StreamMode = streamMode) => {
         if (!episode.aniDBEpisode) {
@@ -810,7 +846,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
         if (!selectedEpisode) return
 
         if (!selectedTorrent) {
-            startAutoSelectedStream(selectedEpisode, streamMode)
+            startPlayableAutoSelectedStream(selectedEpisode, streamMode)
             return
         }
 
@@ -824,7 +860,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
             episode: selectedEpisode,
             torrent: selectedTorrent,
         }, streamMode)
-    }, [autoSelectFile, selectedEpisode, selectedTorrent, startAutoSelectedStream, startManualStream, streamMode])
+    }, [autoSelectFile, selectedEpisode, selectedTorrent, startPlayableAutoSelectedStream, startManualStream, streamMode])
 
     const handleConfirmFileSelection = React.useCallback(() => {
         if (!selectedEpisode || !selectedTorrent || !selectedFileId) return
@@ -942,7 +978,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
         sheetStage,
         smartSearchBatch,
         stopCurrentStream,
-        startAutoSelectedStream,
+        startAutoSelectedStream: startPlayableAutoSelectedStream,
         startPreviousBatchStream,
         streamMode,
         torrents: searchData?.torrents ?? [],

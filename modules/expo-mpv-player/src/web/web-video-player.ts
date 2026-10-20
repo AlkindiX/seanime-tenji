@@ -12,6 +12,7 @@ import type {
     AudioTrack,
     MpvChapter,
     MpvMediaEvent,
+    MpvSourceAudioTrack,
     MpvStreamedSubtitleLine,
     MpvVideoSource,
     OnPlaybackStateChangePayload,
@@ -19,6 +20,7 @@ import type {
     SubtitleTrack,
     TechnicalInfo,
 } from "../MpvPlayer.types"
+import { audioFallbackIndex, audioTrackTitle, type BrowserAudioTrackInfo, matchAudioTracks } from "./audio-tracks"
 import { LibassRenderer, type AssChunk } from "./libass"
 import { levelsAboveHeight, loadFailure, mediaOptionType, shouldReload, type SourceProbe } from "./media-pipeline"
 import { activeCues, assDialogueCue, type AssTopStyles, isAssScript, parseAssStyles, parseSubtitles, stripMarkup, type SubtitleCue } from "./subtitles"
@@ -222,6 +224,8 @@ export class WebVideoPlayer {
     private loadId = 0
     private unsubscribeStreamedSubtitles: (() => void) | null = null
     private loadTimer: ReturnType<typeof setTimeout> | null = null
+    /** The audio tracks were checked for one the TV plays no sound for, this load. */
+    private audioChecked = false
     private lastStatusAt = 0
     private readonly onVisibilityChange = () => this.handleVisibilityChange()
 
@@ -243,6 +247,7 @@ export class WebVideoPlayer {
             this.readyToSeek = true
             this.state({ isLoading: false, isReadyToSeek: true })
             if (firstReady) {
+                this.leaveSilentAudioTrack()
                 this.applyRestoredTracks()
                 this.callbacks.onTracksReady()
             }
@@ -440,6 +445,7 @@ export class WebVideoPlayer {
         this.restoreTracks = null
         this.mediaOptionRetry = false
         this.hlsRecoveries = 0
+        this.audioChecked = false
         this.clearMediaOption()
         this.callbacks.onSubtitleCues([])
         this.video.pause()
@@ -471,6 +477,7 @@ export class WebVideoPlayer {
         // The rate carries over loads (defaultPlaybackRate) with no ratechange to say so.
         this.state({ speed: this.video.playbackRate })
         this.emitProgress()
+        this.leaveSilentAudioTrack()
         this.callbacks.onTracksReady()
 
         // A load that finishes while the app is hidden stays paused.
@@ -675,11 +682,64 @@ export class WebVideoPlayer {
 
         const list = this.audioTrackList()
         if (!list) return []
+        const known = this.knownAudioTracks()
         const tracks: AudioTrack[] = []
         for (let i = 0; i < list.length; i++) {
-            tracks.push({ id: i + 1, title: list[i].label || undefined, lang: list[i].language || undefined, selected: list[i].enabled })
+            const file = known[i]
+            tracks.push({
+                id: i + 1,
+                title: audioTrackTitle(list[i].label || undefined, file),
+                lang: list[i].language || file?.language,
+                codec: file?.codec,
+                selected: list[i].enabled,
+                unplayable: file?.support === "broken" || undefined,
+            })
         }
         return tracks
+    }
+
+    private browserAudioTracks(): BrowserAudioTrackInfo[] {
+        const list = this.audioTrackList()
+        const tracks: BrowserAudioTrackInfo[] = []
+        for (let i = 0; i < (list?.length ?? 0); i++) tracks.push({ label: list![i].label ?? "", language: list![i].language ?? "" })
+        return tracks
+    }
+
+    /** The file's track (`source.audioTracks`) each browser track is, by browser index. */
+    private knownAudioTracks(): Array<MpvSourceAudioTrack | undefined> {
+        const known = this.source?.audioTracks
+        if (!known?.length || this.hls) return []
+        return matchAudioTracks(this.browserAudioTracks(), known).map(index => index === null ? undefined : known[index])
+    }
+
+    /**
+     * Once per load: when the TV starts on an audio track it plays no sound
+     * for (FLAC with more than two channels), switch to one it plays, in the
+     * same language if the file has one.
+     */
+    private leaveSilentAudioTrack() {
+        const source = this.source
+        const list = this.audioTrackList()
+        const known = source?.audioTracks
+        if (this.audioChecked || this.hls || !source || !known?.length || !list || list.length === 0) return
+        this.audioChecked = true
+
+        const mapping = matchAudioTracks(this.browserAudioTracks(), known)
+        let enabled = -1
+        for (let i = 0; i < list.length; i++) {
+            if (list[i].enabled) {
+                enabled = i
+                break
+            }
+        }
+        const target = audioFallbackIndex(enabled, mapping, known)
+        const to = target === null ? null : mapping[target]
+        if (target === null || to === null) return
+        const fromIndex = enabled >= 0 ? mapping[enabled] : null
+        const from = fromIndex !== null ? known[fromIndex] : (known.find(track => track.default) ?? known[0])
+        console.warn("[web-video-player] the TV plays no sound for this audio track; switching", { from: from.codec, to: known[to].codec })
+        this.setAudioTrack(target + 1)
+        source.onAudioTrackFallback?.(from, known[to])
     }
 
     setAudioTrack(id: number) {
