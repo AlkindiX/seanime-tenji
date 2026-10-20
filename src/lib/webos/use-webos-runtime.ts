@@ -3,3 +3,5 @@ export function useWebOSRuntime() {}
 
 /** The Magic Remote pointer only exists on webOS; native TV remotes have none. */
 export function usePointerActivity(_callback: () => void) {}
+
+export function usePointerClick(_callback: () => void) {}
