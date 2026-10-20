@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { activeCues, parseSubtitles } from "../modules/expo-mpv-player/src/web/subtitles.ts"
+import { activeCues, assDialogueCue, isAssScript, parseAssTopStyles, parseSubtitles } from "../modules/expo-mpv-player/src/web/subtitles.ts"
 
 test("srt cues keep their timing and lines", () => {
     const cues = parseSubtitles([
@@ -133,4 +133,35 @@ test("ssa v4 styles and \\a overrides use the legacy alignment numbers", () => {
     ].join("\n"))
 
     assert.deepEqual(cues.map(cue => [cue.text, cue.top]), [["Up", true], ["Centre", false], ["Override up", true]])
+})
+
+test("an MKV track's ASS header gives the styles that sit at the top", () => {
+    const header = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, Alignment",
+        "Style: Default,Arial,20,2",
+        "Style: Top,Arial,20,8",
+    ].join("\n")
+    const styles = parseAssTopStyles(header)
+    assert.equal(styles.get("Default"), false)
+    assert.equal(styles.get("Top"), true)
+})
+
+test("streamed ASS dialogue becomes a cue unless it is positioned", () => {
+    const styles = parseAssTopStyles("[V4+ Styles]\nFormat: Name, Alignment\nStyle: Top,8")
+    assert.deepEqual(assDialogueCue("{\\i1}Hello\\Nthere", "Default", 1, 2.5, styles), { start: 1, end: 2.5, text: "Hello\nthere", top: false })
+    assert.equal(assDialogueCue("Sign", "Top", 0, 1, styles)?.top, true)
+    assert.equal(assDialogueCue("{\\an8}Up here", "Default", 0, 1, styles)?.top, true)
+    assert.equal(assDialogueCue("{\\pos(10,20)}Sign", "Default", 0, 1, styles), null)
+    assert.equal(assDialogueCue("{\\i1}", "Default", 0, 1, styles), null)
+})
+
+test("an ASS script is told apart from SRT and WebVTT, for libass", () => {
+    assert.equal(isAssScript("[Script Info]\nScriptType: v4.00+\n"), true)
+    assert.equal(isAssScript("\n[Events]\nFormat: Layer, Start, End, Style, Text\n"), true)
+    assert.equal(isAssScript("1\n00:00:01,000 --> 00:00:02,000\nHello\n"), false)
+    assert.equal(isAssScript("WEBVTT\n\n00:01.000 --> 00:02.000\nHello\n"), false)
 })

@@ -15,7 +15,7 @@ import type {
 } from "expo-mpv-player"
 import { useAtomValue, useSetAtom } from "jotai/react"
 import React from "react"
-import { findPreferredTrack, getPlayerPreferences, setPlayerPreferences } from "./player-preferences"
+import { findFallbackTrack, findPreferredTrack, getPlayerPreferences, setPlayerPreferences } from "./player-preferences"
 import { useActivePlaybackSource } from "./session"
 import { useWebPlaybackPlan } from "./web-playback-plan"
 
@@ -141,6 +141,9 @@ export function useMpvPlayer() {
         if (playbackPlan.maxVideoHeight) videoSource.maxVideoHeight = playbackPlan.maxVideoHeight
         if (playbackPlan.chapters?.length) videoSource.chapters = playbackPlan.chapters
         if (playbackPlan.mediaInfoSummary) videoSource.mediaInfoSummary = playbackPlan.mediaInfoSummary
+        if (playbackPlan.subtitleFeed) videoSource.subtitleFeed = playbackPlan.subtitleFeed
+        if (playbackPlan.subtitleFonts?.length) videoSource.subtitleFonts = playbackPlan.subtitleFonts
+        if (!prefs.assRendering) videoSource.assRendering = false
         return videoSource
     }, [playbackPlan, source])
     const shouldAutoplay = videoSource?.autoplay ?? true
@@ -500,9 +503,12 @@ export function useMpvPlayer() {
         }
 
         if (prefs.showSubtitles) {
+            const currentSub = state.subtitleTracks.find(t => t.selected)
+            // mpv selects the file's default track by itself; the web player selects none.
+            // So when no track is in a preferred language, show the first one that isn't signs & songs.
             const preferredSub = findPreferredTrack(state.subtitleTracks, prefs.preferredSubtitleLanguages, prefs.ignoredSubtitleLabels)
+                ?? (currentSub ? null : findFallbackTrack(state.subtitleTracks, prefs.ignoredSubtitleLabels))
             if (preferredSub !== null) {
-                const currentSub = state.subtitleTracks.find(t => t.selected)
                 if (currentSub?.id !== preferredSub) {
                     log.info(`Auto-selecting preferred subtitle track: ${preferredSub}`)
                     runNativeCommand("setSubtitleTrack", nativeRef => nativeRef.setSubtitleTrack(preferredSub))
@@ -577,6 +583,11 @@ export function useMpvPlayer() {
                 selected: visible ? t.id === trackId : false,
             })),
         }))
+    }, [runNativeCommand])
+
+    const setAssRendering = React.useCallback((enabled: boolean) => {
+        setPlayerPreferences({ assRendering: enabled })
+        runNativeCommand("setAssRendering", ref => ref.setAssRendering?.(enabled) ?? Promise.resolve())
     }, [runNativeCommand])
 
     const stop = React.useCallback(() => {
@@ -693,6 +704,7 @@ export function useMpvPlayer() {
         seekRelative,
         setAudioTrack,
         setSubtitleTrack,
+        setAssRendering,
         stop,
         setSpeed,
         setSubtitleDelay,

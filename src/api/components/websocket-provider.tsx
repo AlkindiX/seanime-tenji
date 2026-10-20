@@ -1,7 +1,7 @@
 import { addClientQueryParams, getClientIdentity, saveClientIdentityFromEvent } from "@/api/client/client-identity"
 import { getServerBaseUrl } from "@/api/client/server-url"
 import { useWebsocketEventRouter } from "@/api/components/websocket-event-router"
-import { publishWsMessage, type WebsocketMessage } from "@/api/components/websocket-hub"
+import { publishWsMessage, setWsSender, type WebsocketMessage } from "@/api/components/websocket-hub"
 import { useServerAuthToken, useServerUrl, useServerUrlProtocol } from "@/atoms/server.atoms"
 import { degradeServerReachability, markServerReachable } from "@/lib/connection-state"
 import { manualOfflineModeAtom } from "@/lib/offline/manual-offline-mode"
@@ -79,6 +79,9 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
                 if (cancelled || socket !== nextSocket) return
                 log.info("WebSocket connection opened")
                 retryCount = 0
+                setWsSender(message => {
+                    if (nextSocket.readyState === WebSocket.OPEN) nextSocket.send(JSON.stringify(message))
+                })
                 setIsConnected(true)
                 setConnectionState("connected")
                 markServerReachable()
@@ -107,6 +110,7 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
                 if (cancelled || socket !== nextSocket) return
 
                 socket = null
+                setWsSender(null)
                 setIsConnected(false)
                 setConnectionState("disconnected")
                 degradeServerReachability()
@@ -130,6 +134,7 @@ export function WebsocketProvider({ children }: { children: React.ReactNode }) {
 
         return () => {
             cancelled = true
+            setWsSender(null)
             clearRetry()
             appStateSub.remove()
             socket?.close()

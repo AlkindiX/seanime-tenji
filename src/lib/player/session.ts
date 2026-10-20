@@ -9,11 +9,13 @@ import type {
     Anime_Episode,
     Anime_LibraryCollection,
     DebridClient_StreamState,
+    NativePlayer_PlaybackInfo,
     Torrentstream_TorrentStatus,
 } from "@/api/generated/types"
 import { usePlaybackCancelManualTracking } from "@/api/hooks/playback_manager.hooks"
 import { useServerUrl } from "@/atoms/server.atoms"
 import { logger } from "@/lib/utils/logger"
+import { toast } from "@/lib/utils/toast"
 import { useQueryClient } from "@tanstack/react-query"
 import { useRouter } from "expo-router"
 import { atom, useAtom } from "jotai"
@@ -21,6 +23,7 @@ import { useAtomValue } from "jotai/react"
 import React from "react"
 import { openExternalPlayerURL } from "./external-players"
 import { getPlayerPreferences } from "./player-preferences"
+import { beginServerPlayback, endServerPlayback, receiveServerSubtitles } from "./server-playback"
 import type { AnimeEntryLaunchView, MobilePlaybackSource, PlayerNextEpisodeAction } from "./types"
 
 export const currentPlaybackSourceAtom = atom<MobilePlaybackSource | null>(null)
@@ -638,116 +641,166 @@ export function usePlayerEventListener() {
 
                 // externalPlayerLink torrent stream URL
                 if (message.type === "external-player-open-url") {
-                    const payload = message.payload as ExternalPlayerOpenURLPayload
-                    if (!payload?.url) {
-                        log.warning("external-player-open-url payload is missing URL")
-                        return
-                    }
+                    openStream(message.payload as ExternalPlayerOpenURLPayload)
+                    return
+                }
 
-                    log.info("Stream playback URL received", {
-                        mediaId: payload.mediaId,
-                        episodeNumber: payload.episodeNumber,
-                        mode: pendingInfoRef.current?.streamMode ?? streamSessionModeRef.current ?? "torrent",
-                    })
-                    if (typeof payload.mediaId !== "number" || typeof payload.episodeNumber !== "number") {
-                        log.warning("external-player-open-url payload is missing mediaId or episodeNumber")
-                        return
+                // nativeplayer flow (webOS): the server's player pipeline, which sends the MKV's subtitles
+                if (message.type === "native-player") {
+                    const event = message.payload as { type?: string; payload?: unknown } | undefined
+                    switch (event?.type) {
+                        case "watch": {
+                            const info = event.payload as NativePlayer_PlaybackInfo | undefined
+                            if (!info?.streamUrl) {
+                                log.warning("native-player watch event is missing the stream URL")
+                                return
+                            }
+                            const pending = pendingInfoRef.current
+                            const serverPlaybackId = beginServerPlayback(info)
+                            openStream({
+                                url: info.streamUrl,
+                                mediaId: pending?.mediaId ?? info.media?.id,
+                                episodeNumber: pending?.episodeNumber ?? info.episode?.episodeNumber,
+                                mediaTitle: info.media?.title?.userPreferred,
+                            }, { serverPlaybackId, serverStreamType: info.streamType, mkvMetadata: info.mkvMetadata })
+                            return
+                        }
+                        case "subtitle-event":
+                            receiveServerSubtitles(event.payload)
+                            return
+                        case "abort-open": {
+                            // An empty reason: the stream was closed, not failed.
+                            const reason = typeof event.payload === "string" ? event.payload : ""
+                            if (!reason) return
+                            log.error("Server could not open the stream", reason)
+                            toast.error(`Could not open the stream: ${reason}`)
+                            resetTorrentStreamState()
+                            return
+                        }
+                        case "error": {
+                            const reason = (event.payload as { error?: string } | undefined)?.error ?? "Playback failed"
+                            log.error("Server reported a playback error", reason)
+                            setError(reason)
+                            return
+                        }
+                        default:
+                            return
                     }
+                }
+            }
 
+            const openStream = (payload: ExternalPlayerOpenURLPayload, server?: Pick<MobilePlaybackSource, "serverPlaybackId" | "serverStreamType" | "mkvMetadata">) => {
+                if (!payload?.url) {
+                    log.warning("Stream playback payload is missing the URL")
+                    return
+                }
+
+                log.info("Stream playback URL received", {
+                    mediaId: payload.mediaId,
+                    episodeNumber: payload.episodeNumber,
+                    mode: pendingInfoRef.current?.streamMode ?? streamSessionModeRef.current ?? "torrent",
+                })
+                if (typeof payload.mediaId !== "number" || typeof payload.episodeNumber !== "number") {
+                    log.warning("Stream playback payload is missing mediaId or episodeNumber")
+                    return
+                }
+
+                // The server only tracks externalPlayerLink playback manually.
+                if (!server) {
                     clearCancelManualTrackingTimer()
                     cancelManualTrackingTimer.current = setTimeout(() => {
                         log.info("Cancelling manual tracking on server as it is not relevant to Tenji")
                         cancelManualTracking()
                     }, 2000)
+                }
 
-                    const base = getServerBaseUrl(serverUrl)
-                    const resolvedUrl = payload.url
-                        .replace("{{SCHEME}}://{{HOST}}", base)
-                        // fallback: replace individually
-                        .replace("{{SCHEME}}", base.startsWith("https") ? "https" : "http")
-                        .replace("{{HOST}}", base.replace(/^https?:\/\//, ""))
+                const base = getServerBaseUrl(serverUrl)
+                const resolvedUrl = payload.url
+                    .replace("{{SERVER_URL}}", base)
+                    .replace("{{SCHEME}}://{{HOST}}", base)
+                    // fallback: replace individually
+                    .replace("{{SCHEME}}", base.startsWith("https") ? "https" : "http")
+                    .replace("{{HOST}}", base.replace(/^https?:\/\//, ""))
 
-                    const pending = pendingInfoRef.current
-                    const streamPrefix = pending?.streamMode === "debrid" ? "debridstream" : "torrentstream"
+                const pending = pendingInfoRef.current
+                const streamPrefix = pending?.streamMode === "debrid" ? "debridstream" : "torrentstream"
 
-                    const hydrated = resolvePlaybackMetadataFromCache(
-                        queryClient,
-                        payload.mediaId,
-                        payload.episodeNumber,
-                        {
-                            media: pending?.media,
-                            episode: pending?.episode,
-                            entryListData: pending?.entryListData,
-                        },
-                    )
-                    const media = hydrated.media
-                    const episode = hydrated.episode
-                    const entryListData = hydrated.entryListData
+                const hydrated = resolvePlaybackMetadataFromCache(
+                    queryClient,
+                    payload.mediaId,
+                    payload.episodeNumber,
+                    {
+                        media: pending?.media,
+                        episode: pending?.episode,
+                        entryListData: pending?.entryListData,
+                    },
+                )
+                const media = hydrated.media
+                const episode = hydrated.episode
+                const entryListData = hydrated.entryListData
 
-                    const source: MobilePlaybackSource = {
-                        id: `${streamPrefix}-${payload.mediaId}-${payload.episodeNumber}-${Date.now()}`,
-                        streamKind: "http",
-                        url: resolvedUrl,
-                        mediaId: pending?.mediaId ?? payload.mediaId,
-                        episodeNumber: pending?.episodeNumber ?? payload.episodeNumber,
-                        media,
-                        episode,
-                        entryListData,
-                        entryView: pending?.entryView,
-                        nextEpisodeAction: pending?.nextEpisodeAction,
-                        continuityKind: "external_player",
-                    }
+                const source: MobilePlaybackSource = {
+                    id: `${streamPrefix}-${payload.mediaId}-${payload.episodeNumber}-${Date.now()}`,
+                    streamKind: "http",
+                    url: resolvedUrl,
+                    mediaId: pending?.mediaId ?? payload.mediaId,
+                    episodeNumber: pending?.episodeNumber ?? payload.episodeNumber,
+                    media,
+                    episode,
+                    entryListData,
+                    entryView: pending?.entryView,
+                    nextEpisodeAction: pending?.nextEpisodeAction,
+                    continuityKind: "external_player",
+                    ...server,
+                }
 
-                    clearLoadingFallback()
-                    setIsPreparing(false)
-                    setPendingInfo(null)
-                    setStreamSessionMode(null)
-                    setTorrentLoadingState(null)
-                    setTorrentLoadingTorrentName(null)
-                    setDebridStreamState(null)
-                    setActiveStreamSession(current => updateActiveStreamSessionFromExternalPlayerPayload(
-                        current,
-                        pending,
-                        pending?.streamMode ?? streamSessionModeRef.current ?? current?.streamMode ?? "torrent",
-                        payload,
-                    ))
-                    setLoadingMessage(null)
-                    setError(null)
+                clearLoadingFallback()
+                setIsPreparing(false)
+                setPendingInfo(null)
+                setStreamSessionMode(null)
+                setTorrentLoadingState(null)
+                setTorrentLoadingTorrentName(null)
+                setDebridStreamState(null)
+                setActiveStreamSession(current => updateActiveStreamSessionFromExternalPlayerPayload(
+                    current,
+                    pending,
+                    pending?.streamMode ?? streamSessionModeRef.current ?? current?.streamMode ?? "torrent",
+                    payload,
+                ))
+                setLoadingMessage(null)
+                setError(null)
 
-                    log.info("Stream playback source resolved", {
-                        id: source.id,
-                        streamKind: source.streamKind,
-                        mediaId: source.mediaId,
-                        episodeNumber: source.episodeNumber,
-                        hasMedia: !!source.media,
-                        hasEpisode: !!source.episode,
+                log.info("Stream playback source resolved", {
+                    id: source.id,
+                    streamKind: source.streamKind,
+                    mediaId: source.mediaId,
+                    episodeNumber: source.episodeNumber,
+                    hasMedia: !!source.media,
+                    hasEpisode: !!source.episode,
+                })
+
+                // external player
+                const prefs = getPlayerPreferences()
+                if (prefs.externalPlayerTemplate) {
+                    log.info("Opening stream in external player")
+                    openExternalPlayerURL(prefs.externalPlayerTemplate, resolvedUrl).then(opened => {
+                        if (opened) {
+                            log.info("Successfully opened external player URL")
+                            return
+                        }
+
+                        log.warning("Failed to open external player URL, falling back to internal route")
+                        setSource(source)
+                        setPlayerOpen(true)
+                        router.push("/(app)/(media)/player" as never)
                     })
-
-                    // external player
-                    const prefs = getPlayerPreferences()
-                    if (prefs.externalPlayerTemplate) {
-                        log.info("Opening stream in external player")
-                        openExternalPlayerURL(prefs.externalPlayerTemplate, resolvedUrl).then(opened => {
-                            if (opened) {
-                                log.info("Successfully opened external player URL")
-                                return
-                            }
-
-                            log.warning("Failed to open external player URL, falling back to internal route")
-                            setSource(source)
-                            setPlayerOpen(true)
-                            router.push("/(app)/(media)/player" as never)
-                        })
-                        return
-                    }
-
-                    log.info("Opening internal media player")
-                    setSource(source)
-                    setPlayerOpen(true)
-                    router.push("/(app)/(media)/player" as never)
                     return
                 }
 
+                log.info("Opening internal media player")
+                setSource(source)
+                setPlayerOpen(true)
+                router.push("/(app)/(media)/player" as never)
             }
 
             const unsubscribe = subscribeWsMessage(handleMessage)
@@ -804,6 +857,8 @@ export function useCleanupPlaybackSession() {
 
     return React.useCallback(() => {
             const activeSource = sourceRef.current
+            // A stream played through the server's player pipeline ends there too.
+            if (activeSource?.serverPlaybackId) endServerPlayback(activeSource.serverPlaybackId)
             setSource(null)
             setPlayerOpen(false)
             setLoadingMessage(null)

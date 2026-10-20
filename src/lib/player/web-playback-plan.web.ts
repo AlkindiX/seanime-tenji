@@ -23,6 +23,9 @@ import type { MobilePlaybackSource, WebPlaybackPlan } from "./types"
 const log = logger("web-playback-plan")
 
 const SUBS_ENDPOINT = "/api/v1/mediastream/subs"
+/** Fonts attached to a library file, and to a stream played through the server's pipeline. */
+const LIBRARY_FONTS_ENDPOINT = "/api/v1/mediastream/att/"
+const STREAM_FONTS_ENDPOINT = "/api/v1/directstream/att/"
 // The request runs ffprobe/ffmpeg on the server; don't hold playback back for long.
 const TIMEOUT_MS = 8000
 /** MediaError codes for "can't decode" and "format not supported". */
@@ -68,6 +71,21 @@ function toSubtitles(serverUrl: string, mediaInfo: MediaInfo | undefined): MpvEx
             lang: subtitle.language,
         }]
     })
+}
+
+/** Font URLs for libass, each signed for its own path (the server checks the token against it). */
+function toFonts(serverUrl: string, endpoint: string, names: readonly string[] | undefined): string[] {
+    return (names ?? []).map((name) => {
+        const path = `${endpoint}${name}`
+        return appendServerHMACToken(`${serverUrl}${endpoint}${encodeURIComponent(name)}`, path)
+    })
+}
+
+function streamFonts(source: MobilePlaybackSource | null): string[] | undefined {
+    const serverUrl = source?.serverPlaybackId ? serverUrlOf(source) : null
+    if (!serverUrl) return undefined
+    const names = source?.mkvMetadata?.attachments?.filter(attachment => attachment.type === "font").map(attachment => attachment.filename)
+    return toFonts(serverUrl, STREAM_FONTS_ENDPOINT, names)
 }
 
 function requestStream(serverUrl: string, path: string, streamType: "direct" | "transcode") {
@@ -122,6 +140,7 @@ async function resolveLibraryPlan(source: MobilePlaybackSource, forceTranscode: 
 
     const plan: Omit<WebPlaybackPlan, "onPlaybackError"> = {
         externalSubtitles: toSubtitles(serverUrl, mediaInfo),
+        subtitleFonts: toFonts(serverUrl, LIBRARY_FONTS_ENDPOINT, mediaInfo?.fonts),
         chapters: toChapters(mediaInfo),
         startPosition,
         mediaInfoSummary: {
@@ -217,6 +236,8 @@ export function useWebPlaybackPlan(source: MobilePlaybackSource | null): WebPlay
     const { data: watchHistory } = useGetContinuityWatchHistory()
     const library = isLibraryFile(source)
     const streamIsHls = source?.streamKind === "hls"
+    const subtitleFeed = source?.serverPlaybackId
+    const subtitleFonts = React.useMemo(() => streamFonts(source), [source])
     const forceTranscode = !!source && fallback?.id === source.id
     const key = source ? `${source.id}:${forceTranscode ? "transcode" : "auto"}` : ""
     // The effect runs per source id: the source object can be replaced during
@@ -278,9 +299,10 @@ export function useWebPlaybackPlan(source: MobilePlaybackSource | null): WebPlay
         if (!source) return undefined
         if (!library) {
             // The player would otherwise guess from the URL, and online HLS links may lack ".m3u8".
-            return { externalSubtitles: NO_SUBTITLES, isHls: streamIsHls, onPlaybackError }
+            // Streams played through the server's pipeline get the MKV's subtitles from it as they play.
+            return { externalSubtitles: NO_SUBTITLES, isHls: streamIsHls, subtitleFeed, subtitleFonts, onPlaybackError }
         }
         if (!current) return undefined
         return { ...current.plan, onPlaybackError }
-    }, [current, library, onPlaybackError, source, streamIsHls])
+    }, [current, library, onPlaybackError, source, streamIsHls, subtitleFeed, subtitleFonts])
 }

@@ -12,6 +12,21 @@ export type SubtitleCue = {
     text: string
     /** The line belongs at the top of the screen (ASS \an7-9 or a top-aligned style). */
     top?: boolean
+    /** An image subtitle (PGS) instead of text. */
+    image?: SubtitleImage
+}
+
+/** A bitmap subtitle placed on the video's own pixel grid (`canvasWidth` × `canvasHeight`). */
+export type SubtitleImage = {
+    src: string
+    x: number
+    y: number
+    width: number
+    height: number
+    canvasWidth: number
+    canvasHeight: number
+    /** The part of the image shown at (x, y), when the stream crops it. */
+    crop?: { x: number; y: number; width: number; height: number }
 }
 
 function parseTimestamp(value: string): number {
@@ -92,13 +107,14 @@ function parseSrtOrVtt(content: string): SubtitleCue[] {
     return cues.sort((a, b) => a.start - b.start)
 }
 
-function parseAss(content: string): SubtitleCue[] {
-    const cues: SubtitleCue[] = []
+/** Style name -> whether its Alignment puts lines at the top. */
+export type AssTopStyles = Map<string, boolean>
+
+/** The styles of an ASS/SSA script, or of the header an MKV track keeps in CodecPrivate. */
+export function parseAssTopStyles(content: string): AssTopStyles {
+    const topStyles: AssTopStyles = new Map()
     let section = ""
-    let format: string[] = []
     let styleFormat: string[] = []
-    /** Style name -> whether its Alignment puts lines at the top. */
-    const topStyles = new Map<string, boolean>()
     // SSA v4 ([V4 Styles]) numbers alignments differently from ASS ([V4+ Styles]).
     let legacyAlignment = false
 
@@ -109,21 +125,37 @@ function parseAss(content: string): SubtitleCue[] {
             legacyAlignment = section === "[v4 styles]"
             continue
         }
-        const lower = line.toLowerCase()
+        if (section !== "[v4+ styles]" && section !== "[v4 styles]") continue
 
-        if (section === "[v4+ styles]" || section === "[v4 styles]") {
-            if (lower.startsWith("format:")) {
-                styleFormat = line.slice(7).split(",").map(field => field.trim().toLowerCase())
-            } else if (lower.startsWith("style:") && styleFormat.length > 0) {
-                const values = line.slice(6).split(",").map(value => value.trim())
-                const name = values[styleFormat.indexOf("name")]
-                const alignment = Number(values[styleFormat.indexOf("alignment")])
-                if (name !== undefined && Number.isFinite(alignment)) {
-                    topStyles.set(name, legacyAlignment ? legacyAlignmentIsTop(alignment) : alignment >= 7)
-                }
+        const lower = line.toLowerCase()
+        if (lower.startsWith("format:")) {
+            styleFormat = line.slice(7).split(",").map(field => field.trim().toLowerCase())
+        } else if (lower.startsWith("style:") && styleFormat.length > 0) {
+            const values = line.slice(6).split(",").map(value => value.trim())
+            const name = values[styleFormat.indexOf("name")]
+            const alignment = Number(values[styleFormat.indexOf("alignment")])
+            if (name !== undefined && Number.isFinite(alignment)) {
+                topStyles.set(name, legacyAlignment ? legacyAlignmentIsTop(alignment) : alignment >= 7)
             }
+        }
+    }
+
+    return topStyles
+}
+
+function parseAss(content: string): SubtitleCue[] {
+    const cues: SubtitleCue[] = []
+    const topStyles = parseAssTopStyles(content)
+    let section = ""
+    let format: string[] = []
+
+    for (const rawLine of content.replace(/\r/g, "").split("\n")) {
+        const line = rawLine.trim()
+        if (line.startsWith("[")) {
+            section = line.toLowerCase()
             continue
         }
+        const lower = line.toLowerCase()
         if (section !== "[events]") continue
 
         if (lower.startsWith("format:")) {
@@ -138,30 +170,42 @@ function parseAss(content: string): SubtitleCue[] {
         fields.push(values.slice(format.length - 1).join(","))
         const field = (name: string) => fields[format.indexOf(name)]?.trim() ?? ""
 
-        const raw = field("text")
-        if (/\\(pos|move)\(|\\p[1-9]/.test(raw)) continue
-
-        const text = raw
-            .replace(/\\N/gi, "\n")
-            .replace(/\\h/g, " ")
-            .replace(/\{[^}]*\}/g, "")
-            .trim()
-        if (!text) continue
-
-        cues.push({
-            start: parseTimestamp(field("start")),
-            end: parseTimestamp(field("end")),
-            text,
-            // An override in the line wins over its style's alignment.
-            top: overrideIsTop(raw) ?? topStyles.get(field("style").replace(/^\*/, "")) ?? false,
-        })
+        const cue = assDialogueCue(field("text"), field("style"), parseTimestamp(field("start")), parseTimestamp(field("end")), topStyles)
+        if (cue) cues.push(cue)
     }
 
     return cues.sort((a, b) => a.start - b.start)
 }
 
+/**
+ * One ASS dialogue text as a cue, or null for an empty line or one that only
+ * makes sense positioned (signs drawn with \pos/\move/\p).
+ */
+export function assDialogueCue(raw: string, style: string, start: number, end: number, topStyles: AssTopStyles): SubtitleCue | null {
+    if (/\\(pos|move)\(|\\p[1-9]/.test(raw)) return null
+
+    const text = raw
+        .replace(/\\N/gi, "\n")
+        .replace(/\\h/g, " ")
+        .replace(/\{[^}]*\}/g, "")
+        .trim()
+    if (!text) return null
+
+    return {
+        start,
+        end,
+        text,
+        // An override in the line wins over its style's alignment.
+        top: overrideIsTop(raw) ?? topStyles.get(style.trim().replace(/^\*/, "")) ?? false,
+    }
+}
+
+export function isAssScript(content: string) {
+    return /^\s*\[Script Info\]/im.test(content) || /^\s*\[Events\]/im.test(content)
+}
+
 export function parseSubtitles(content: string): SubtitleCue[] {
-    if (/^\s*\[Script Info\]/im.test(content) || /^\s*\[Events\]/im.test(content)) {
+    if (isAssScript(content)) {
         return parseAss(content)
     }
     return parseSrtOrVtt(content)
