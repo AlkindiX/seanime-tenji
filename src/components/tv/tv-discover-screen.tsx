@@ -13,13 +13,15 @@ import {
 } from "@/components/features/discover/discover-queries"
 import { OfflineBanner } from "@/components/shared/offline-banner"
 import { TV, TVButton, TVHeroCarousel, type TVHeroItem, TVPageSkeleton, TVPillButton, TVShelf, tvSize } from "@/components/tv"
+import { TVNavScrim } from "@/components/tv/tv-nav-scrim"
 import { cleanHtml, mediaTitle } from "@/lib/media-metadata"
 import { useIsServerConnected } from "@/lib/offline"
 import { SEARCH_MEDIA_GENRES } from "@/lib/search/search-constants"
 import Ionicons from "@expo/vector-icons/Ionicons"
 import { router, useIsFocused } from "expo-router"
 import * as React from "react"
-import { FlatList, Pressable, ScrollView, Text, TVFocusGuideView, View } from "react-native"
+import { FlatList, Pressable, Text, TVFocusGuideView, View } from "react-native"
+import Animated, { useAnimatedScrollHandler, useSharedValue } from "react-native-reanimated"
 
 type Shelf = {
     key: string
@@ -28,6 +30,12 @@ type Shelf = {
 }
 
 export function TVDiscoverScreen() {
+    const scrollY = useSharedValue(0)
+    const scrollHandler = useAnimatedScrollHandler({
+        onScroll: (event) => {
+            scrollY.value = event.contentOffset.y
+        },
+    })
     const isFocused = useIsFocused()
     const isConnected = useIsServerConnected()
     const serverStatus = useServerStatus()
@@ -142,80 +150,85 @@ export function TVDiscoverScreen() {
     }
 
     return (
-        <ScrollView
-            className="flex-1 bg-background"
-            fadingEdgeLength={{ start: TV.navInset + tvSize(18), end: 0 }}
-            contentContainerStyle={{ paddingBottom: tvSize(80), gap: TV.sectionGap }}
-            showsVerticalScrollIndicator={false}
-        >
-            <TVHeroCarousel
-                items={heroItems}
-                active={isFocused}
-                preferred
-                loading={trending.isLoading || trending.isFetching}
-            />
-
-            <View style={{ gap: tvSize(14) }}>
-                <TVFocusGuideView
-                    autoFocus={isFocused}
-                    destinations={searchButton ? [searchButton] : undefined}
-                    style={{
-                        paddingHorizontal: TV.gutter,
-                        flexDirection: "row",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                    }}
-                >
-                    <View>
-                        <Text className="font-bold text-white" style={{ marginTop: tvSize(3), fontSize: tvSize(28) }}>
-                            Genre
-                        </Text>
-                    </View>
-                    <TVButton
-                        ref={setSearchButton}
-                        label="Search anime"
-                        variant="secondary"
-                        size="compact"
-                        icon={<Ionicons name="search" size={tvSize(20)} color="white" />}
-                        onPress={() => router.push({
-                            pathname: "/(app)/(tabs)/discover/search",
-                            params: { type: "anime" },
-                        })}
-                    />
-                </TVFocusGuideView>
-                <TVFocusGuideView trapFocusLeft trapFocusRight>
-                    <FlatList
-                        horizontal
-                        data={genreOptions}
-                        keyExtractor={item => item ?? "all"}
-                        showsHorizontalScrollIndicator={false}
-                        contentContainerStyle={{
-                            paddingHorizontal: TV.gutter,
-                            paddingTop: tvSize(8),
-                            paddingBottom: tvSize(10),
-                            gap: tvSize(10),
-                        }}
-                        renderItem={({ item, index }) => (
-                            <TVPillButton
-                                label={item ?? "All"}
-                                active={genre === item}
-                                preferred={heroItems.length === 0 && index === 0}
-                                onPress={() => setGenre(item)}
-                            />
-                        )}
-                    />
-                </TVFocusGuideView>
-            </View>
-
-            {shelves.map((shelf, index) => (
-                <TVShelf
-                    key={shelf.key}
-                    title={shelf.title}
-                    media={shelf.media}
-                    showAudienceScore
-                    first={heroItems.length === 0 && index === 0}
+        <View className="flex-1 bg-background">
+            <Animated.ScrollView
+                style={{ flex: 1 }}
+                fadingEdgeLength={{ start: TV.navInset + tvSize(18), end: 0 }}
+                contentContainerStyle={{ paddingBottom: tvSize(80), gap: TV.sectionGap }}
+                showsVerticalScrollIndicator={false}
+                onScroll={scrollHandler}
+                scrollEventThrottle={16}
+            >
+                <TVHeroCarousel
+                    items={heroItems}
+                    active={isFocused}
+                    preferred
+                    loading={trending.isLoading || trending.isFetching}
                 />
-            ))}
-        </ScrollView>
+
+                <View style={{ gap: tvSize(14) }}>
+                    <TVFocusGuideView
+                        autoFocus={isFocused}
+                        destinations={searchButton ? [searchButton] : undefined}
+                        style={{
+                            paddingHorizontal: TV.gutter,
+                            flexDirection: "row",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                        }}
+                    >
+                        <View>
+                            <Text className="font-bold text-white" style={{ marginTop: tvSize(3), fontSize: tvSize(28) }}>
+                                Genre
+                            </Text>
+                        </View>
+                        <TVButton
+                            ref={setSearchButton}
+                            label="Search anime"
+                            variant="secondary"
+                            size="compact"
+                            icon={<Ionicons name="search" size={tvSize(20)} color="white" />}
+                            onPress={() => router.push({
+                                pathname: "/(app)/(tabs)/discover/search",
+                                params: { type: "anime" },
+                            })}
+                        />
+                    </TVFocusGuideView>
+                    <TVFocusGuideView trapFocusLeft trapFocusRight>
+                        <FlatList
+                            horizontal
+                            data={genreOptions}
+                            keyExtractor={item => item ?? "all"}
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={{
+                                paddingHorizontal: TV.gutter,
+                                paddingTop: tvSize(8),
+                                paddingBottom: tvSize(10),
+                                gap: tvSize(10),
+                            }}
+                            renderItem={({ item, index }) => (
+                                <TVPillButton
+                                    label={item ?? "All"}
+                                    active={genre === item}
+                                    preferred={heroItems.length === 0 && index === 0}
+                                    onPress={() => setGenre(item)}
+                                />
+                            )}
+                        />
+                    </TVFocusGuideView>
+                </View>
+
+                {shelves.map((shelf, index) => (
+                    <TVShelf
+                        key={shelf.key}
+                        title={shelf.title}
+                        media={shelf.media}
+                        showAudienceScore
+                        first={heroItems.length === 0 && index === 0}
+                    />
+                ))}
+            </Animated.ScrollView>
+            <TVNavScrim scrollY={scrollY} />
+        </View>
     )
 }

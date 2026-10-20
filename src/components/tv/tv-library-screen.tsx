@@ -1,8 +1,10 @@
 import type { AL_BaseAnime } from "@/api/generated/types"
-import { getEpisodePercentageComplete, useGetContinuityWatchHistory } from "@/api/hooks/continuity.hooks"
+import { getEpisodeMinutesRemaining, getEpisodePercentageComplete, useGetContinuityWatchHistory } from "@/api/hooks/continuity.hooks"
 import { animeEntryPlaybackIntentAtom, createAnimeEntryPlaybackIntent } from "@/atoms/anime-entry.atoms"
 import { useServerStatus } from "@/atoms/server.atoms"
 import {
+    EPISODE_ROW_LAYOUT,
+    ROW_OVERFLOW,
     TV,
     TVContinueCard,
     TVHeroCarousel,
@@ -14,6 +16,7 @@ import {
     TVShelf,
     tvSize,
 } from "@/components/tv"
+import { TVNavScrim } from "@/components/tv/tv-nav-scrim"
 import type { TVMediaMeta } from "@/components/tv/tv-shelf"
 import { ContinueWatchingItem, useAnimeLibraryCollection } from "@/hooks/use-anime-library-collection"
 import { getContinueWatchingSpoilerActive, getEpisodeSpoilerState, getSpoilerSafeAnimeImage } from "@/lib/anime-spoilers"
@@ -24,7 +27,7 @@ import { filterEntriesByTitle } from "@/lib/utils/filtering"
 import { router, useFocusEffect, useIsFocused } from "expo-router"
 import { useSetAtom } from "jotai"
 import * as React from "react"
-import { FlatList, ScrollView, Text, TVFocusGuideView, View } from "react-native"
+import { FlatList, Platform, ScrollView, Text, TVFocusGuideView, View } from "react-native"
 import Animated, { Extrapolation, interpolate, useAnimatedScrollHandler, useAnimatedStyle, useSharedValue } from "react-native-reanimated"
 
 type Shelf = {
@@ -81,6 +84,22 @@ export function TVLibraryScreen() {
         return filterEntriesByTitle(allEntries, deferredSearch).map(item => item.media).filter((media): media is AL_BaseAnime => !!media)
     }, [allEntries, deferredSearch])
     const searching = search.trim().length > 0
+
+    // webOS: the show page's code runs the first time it is required, which
+    // made the first show opened noticeably slower than the rest on a TV.
+    // Load it while the library sits idle instead.
+    React.useEffect(() => {
+        if (Platform.OS !== "web" || isLoading) return
+        const warm = () => {
+            void import("@/components/features/media/anime-entry-screen")
+        }
+        if (typeof requestIdleCallback === "function") {
+            const handle = requestIdleCallback(warm, { timeout: 5000 })
+            return () => cancelIdleCallback(handle)
+        }
+        const timer = setTimeout(warm, 2000)
+        return () => clearTimeout(timer)
+    }, [isLoading])
 
     useFocusEffect(React.useCallback(() => {
         if (isConnected) refetch()
@@ -171,6 +190,8 @@ export function TVLibraryScreen() {
                     episodeNumber: episode.progressNumber || episode.episodeNumber,
                     spoilerActive,
                 })
+                const progressPercent = getEpisodePercentageComplete(watchHistory, media.id, episode.progressNumber)
+                const minutesLeft = getEpisodeMinutesRemaining(watchHistory, media.id, episode.progressNumber)
                 return {
                     key: `${media.id}-${episode.progressNumber}`,
                     image: spoiler.hideThumbnail
@@ -189,12 +210,10 @@ export function TVLibraryScreen() {
                     ].filter(Boolean).join("  ·  "),
                     description: cleanHtml(media.description),
                     score: media.meanScore,
-                    progressPercent: getEpisodePercentageComplete(
-                        watchHistory,
-                        media.id,
-                        episode.progressNumber,
-                    ),
-                    actionLabel: `Play ${episode.displayTitle}`,
+                    progressPercent,
+                    // The hero falls back to a percentage without it.
+                    progressLabel: progressPercent > 0 && minutesLeft > 0 ? `${minutesLeft}m left` : undefined,
+                    actionLabel: progressPercent > 0 ? `Resume ${episode.displayTitle}` : `Play ${episode.displayTitle}`,
                     onAction: () => openContinue(item),
                     secondaryLabel: "View details",
                     onSecondary: () => openMedia(media.id),
@@ -316,12 +335,13 @@ export function TVLibraryScreen() {
                                         horizontal
                                         data={continueWatchingList}
                                         renderItem={renderContinue}
+                                        getItemLayout={EPISODE_ROW_LAYOUT}
                                         keyExtractor={(item,
                                             index,
                                         ) => item.episode.localFile?.path || `${item.episode.baseAnime?.id ?? "episode"}-${item.episode.type}-${item.episode.episodeNumber}-${index}`}
                                         snapToAlignment="item"
                                         snapToItemPadding={TV.gutter}
-                                        style={{ flexGrow: 0, overflow: "visible" }}
+                                        style={[{ flexGrow: 0 }, ROW_OVERFLOW]}
                                         contentContainerStyle={{
                                             paddingHorizontal: TV.gutter,
                                             paddingTop: tvSize(10),
@@ -354,6 +374,7 @@ export function TVLibraryScreen() {
                     ))}
                 </Animated.ScrollView>
             )}
+            {!searching ? <TVNavScrim scrollY={scrollY} /> : null}
         </View>
     )
 }

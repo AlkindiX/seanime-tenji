@@ -22,6 +22,7 @@ import {
     TVToolbar,
     tvSize,
 } from "@/components/tv"
+import { TVNavScrim } from "@/components/tv/tv-nav-scrim"
 import type { TVMediaMeta } from "@/components/tv/tv-shelf"
 import {
     type CollectionParams,
@@ -327,6 +328,7 @@ export function TVMyListsScreen() {
                     ) : null}
                 </View>
             </ScrollView>
+            <TVNavScrim />
 
             <TVCollectionFilterDrawer
                 open={filterOpen}

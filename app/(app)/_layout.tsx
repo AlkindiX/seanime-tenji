@@ -2,6 +2,7 @@ import { ServerDataWrapper } from "@/api/components/server-data-wrapper"
 import { useServerUrl } from "@/atoms/server.atoms"
 import { useDownloadQueueResumeService } from "@/lib/downloads/download-queue-resume-service"
 import { useDownloadSnapshotRefreshService, useOfflineSyncService, useServerLocalSyncService } from "@/lib/offline"
+import { tvStackScreenLayout } from "@/components/tv/tv-screen-transition"
 import { usePlayerEventListener } from "@/lib/player"
 import { Stack } from "expo-router"
 import { Platform, View } from "react-native"
@@ -32,7 +33,7 @@ export default function AppLayout() {
         <ServerDataWrapper>
             {!Platform.isTV && <BackgroundServices />}
             <PlayerEventMount />
-            <Stack screenOptions={{ headerShown: false }}>
+            <Stack screenOptions={{ headerShown: false }} screenLayout={Platform.isTV ? tvStackScreenLayout : undefined}>
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                 <Stack.Screen
                     name="entry"
