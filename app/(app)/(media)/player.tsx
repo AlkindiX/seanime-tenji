@@ -38,6 +38,7 @@ import { getBufferedRatio } from "@/components/features/player/progress"
 import type { PlayerPanel } from "@/components/features/player/types"
 import { createGestureRefs, syncGestureRef } from "@/components/features/player/types"
 import { TVPlayerControls, TVPlayerDialog, TVPlayerPanel } from "@/components/tv"
+import { useTVScrub } from "@/components/tv/use-tv-scrub"
 import { isLocalServer } from "@/lib/downloads"
 import { useIsServerConnected } from "@/lib/offline"
 import {
@@ -409,6 +410,23 @@ function PlayerScreenInner() {
         seek: player.seekRelative,
         touch: touchTVSeek,
     })
+
+    // webOS scrubbing: left/right, the seek buttons and the fast-forward/rewind
+    // keys move a target that is seeked once, when the presses stop (see
+    // src/lib/player/scrub.ts).
+    const scrub = useTVScrub({
+        time: state.currentTime,
+        duration: state.duration,
+        step: prefs.buttonSeekSec,
+        seekTo: player.seekTo,
+        seekRelative: player.seekRelative,
+        onActivity: touchTVSeek,
+    })
+
+    // A target picked in one episode doesn't carry over to the next.
+    React.useEffect(() => {
+        scrub.reset()
+    }, [scrub, source?.id])
 
     // sync gRef every render
     syncGestureRef(gRef, {
@@ -814,18 +832,33 @@ function PlayerScreenInner() {
         }
         if (event.eventType === "fastForward" || event.eventType === "rewind") {
             if (tvKeyAction(event) === 0) return
-            player.seekRelative(event.eventType === "fastForward" ? prefs.buttonSeekSec : -prefs.buttonSeekSec)
+            const direction = event.eventType === "fastForward" ? 1 : -1
+            if (Platform.OS === "web") scrub.nudge(direction)
+            else player.seekRelative(direction * prefs.buttonSeekSec)
             controls.showControls()
             return
         }
 
-        if (event.eventType === "longLeft") {
-            if (tvKeyAction(event) === 0) tvLongSeek.start(-1)
-            if (tvKeyAction(event) === 1) tvLongSeek.stop()
-            return
-        }
-        if (event.eventType === "longRight") {
-            if (tvKeyAction(event) === 0) tvLongSeek.start(1)
+        if (event.eventType === "longLeft" || event.eventType === "longRight") {
+            const direction = event.eventType === "longLeft" ? -1 : 1
+            if (Platform.OS === "web") {
+                // Holding scrubs here while the controls are hidden, and from the
+                // seek bar in TVPlayerControls; on the buttons it only moves focus.
+                if (tvKeyAction(event) === 1) {
+                    scrub.release()
+                } else if (
+                    tvKeyAction(event) === 0
+                    && !controls.controlsVisible
+                    && !panel
+                    && !nextEpisodePrompt
+                    && !showExitPrompt
+                ) {
+                    scrub.hold(direction)
+                    controls.showControls()
+                }
+                return
+            }
+            if (tvKeyAction(event) === 0) tvLongSeek.start(direction)
             if (tvKeyAction(event) === 1) tvLongSeek.stop()
             return
         }
@@ -839,6 +872,20 @@ function PlayerScreenInner() {
         ) return
 
         if (panel || nextEpisodePrompt || showExitPrompt) return
+
+        // webOS: left/right with the controls hidden bring them up on the seek
+        // bar and start scrubbing on the press itself, not on its release.
+        if (
+            Platform.OS === "web"
+            && !controls.controlsVisible
+            && (event.eventType === "left" || event.eventType === "right")
+        ) {
+            if (tvKeyAction(event) === 0) {
+                scrub.nudge(event.eventType === "left" ? -1 : 1)
+                controls.showControls()
+            }
+            return
+        }
 
         if (tvKeyAction(event) === 0) return
 
@@ -1194,6 +1241,8 @@ function PlayerScreenInner() {
         }
         // 0 to 9 jump to that tenth of the episode (0 is the start).
         if (/^[0-9]$/.test(type)) {
+            // A pending scrub target would otherwise seek away from the jump.
+            scrub.reset()
             if (state.duration > 0) player.seekTo(state.duration * Number(type) / 10)
             controls.showControls()
             return true
@@ -1455,6 +1504,7 @@ function PlayerScreenInner() {
                             onShowControls={controls.showControls}
                             onControlFocus={controls.scheduleHide}
                             onControlAction={controls.scheduleHide}
+                            scrub={Platform.OS === "web" ? scrub : undefined}
                         />
                     ) : (
                         <ControlsOverlay

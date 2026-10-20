@@ -109,6 +109,27 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
     player can wait forever without an error, notably on audio it doesn't play inside a
     video file: FLAC, Vorbis, TrueHD, and DTS on many models. Tenji warns when a torrent or
     debrid stream has such audio; pick a release with AAC or AC-3 audio instead.
+- **Controls** are laid out as on YouTube on TV: title and episode at the top left, the
+  seek bar across the bottom with the elapsed and total time under it, and one centred
+  row of round buttons under that, play/pause in the middle and largest (rewind and
+  forward by the seek step, next episode, audio & subtitles, settings and episodes
+  around it). Play/pause has focus when the controls come up; the focused button turns
+  white and shows its name under it. The controls fade in.
+- **Seeking (scrubbing).** Left/right don't seek the video on every press: they move a
+  target on the seek bar, shown with its time and how far it is from where you were
+  (`+30s`), and Tenji seeks once, about 0.7 s after the last press, or at once on OK.
+  Each seek of a torrent stream makes the server fetch from a new spot and restart its
+  subtitle reading, so ten quick presses are one seek. Holding left/right moves the
+  target faster the longer it is held (a full episode in about eight seconds at top
+  speed). Back while a target is showing drops it and does nothing else. With the
+  controls hidden, left/right bring them up on the seek bar and start scrubbing right
+  away; the rewind/forward buttons and ⏩/⏪ move the target too. Until the seek lands,
+  the bar stays on the target. Without a known duration, the presses add up to one
+  relative seek.
+- **Torrent stream stats.** With the controls up, a pill at the top right shows the
+  download speed, how much of the file is downloaded, the seeders and how far ahead of
+  playback the video is buffered. It is shown only for torrent streams, once the
+  server has sent its first stats.
 - **Playback stats** (Info key) show the mode (`html5 · direct play`, or
   `html5+hls.js · transcode`), the file's codecs, why it is transcoded, and the TV model.
 - **Chapters** of library files come from the server, so the seek bar shows them (and the
@@ -251,14 +272,15 @@ The arrow keys, OK and Back work as on Android TV. LG remotes also have these ke
 | Stop | Ask to leave the player | |
 | CH+ / CH- | Next / previous episode (asks first when much of the episode is left) | Page up / down through a list or grid |
 | 0 to 9 | Jump to 0 %, 10 % … 90 % of the episode | Type into a text field |
-| Play, Pause, ⏩, ⏪ | Play, pause, seek | |
+| Play, Pause, ⏩, ⏪ | Play, pause, move the seek target (see Seeking) | |
 
 Android TV remotes that have these keys get the same player shortcuts.
 
 **Magic Remote pointer.** Moving the pointer shows the player controls, clicking the
-video pauses or plays, and clicking the timeline seeks to that spot. Focus follows the
-pointer. When the pointer hides or a system overlay takes it, the D-pad highlight comes
-back.
+video pauses or plays, and clicking the timeline seeks to that spot. Pressing on the
+timeline and dragging shows the target as you move; letting go seeks there, once.
+Focus follows the pointer. When the pointer hides or a system overlay takes it, the
+D-pad highlight comes back.
 
 **Dragging.** Press the wheel (OK) on a row and move the pointer to drag the row sideways,
 or on the page to drag it up and down; let go while moving and it glides on a little. A
@@ -292,6 +314,9 @@ are released, so a long seek doesn't continue when you come back.
 - **OK in pointer mode.** If a TV sends both a keydown 13 and a click for one OK press, a
   button would fire twice. This needs checking on a TV before adding any de-duplication.
   Pausing from the wheel already counts only one of the two (within 400 ms).
+- How scrubbing feels with a real remote: LG's key repeat delay and rate decide when a
+  held arrow starts moving the target, and dragging the timeline with the Magic Remote.
+  Checked with unit tests and the typecheck only.
 - Pausing with the wheel, and how dragging feels with a real Magic Remote. Dragging was
   checked in desktop Chromium with a mouse.
 - How far one wheel notch scrolls (`deltaY` per notch) on a real Magic Remote.
