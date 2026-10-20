@@ -6,9 +6,14 @@ import { Ionicons } from "@/lib/icons/Ionicons"
 import { Image } from "expo-image"
 import { LinearGradient } from "expo-linear-gradient"
 import * as React from "react"
-import { Pressable, Text, TVFocusGuideView, View } from "react-native"
+import { Platform, Pressable, Text, TVFocusGuideView, View } from "react-native"
 
 const ROTATE_MS = 10000
+/** Backdrop cross-fade; the text eases in over the first part of it. */
+const FADE_MS = 900
+const TEXT_MS = 480
+const EASE_OUT = "cubic-bezier(0.22, 1, 0.36, 1)"
+const BRAND = "#8176ef"
 
 export type TVHeroItem = {
     key: string
@@ -19,7 +24,10 @@ export type TVHeroItem = {
     meta?: string
     description?: string
     score?: number
+    /** Watched share of the episode the action plays (0-100). */
     progressPercent?: number
+    /** Shown next to the progress meter, e.g. "12m left". */
+    progressLabel?: string
     actionLabel: string
     onAction: () => void
     secondaryLabel?: string
@@ -34,6 +42,22 @@ type Props = {
     loading?: boolean
 }
 
+type ViewNode = React.ComponentRef<typeof View>
+
+/**
+ * Web Animations on opacity and transform: the TV's compositor runs them.
+ * Native TV builds switch slides without them.
+ */
+function animate(view: ViewNode | null, keyframes: Keyframe[], options: KeyframeAnimationOptions) {
+    if (Platform.OS !== "web") return null
+    const node = view as unknown as HTMLElement | null
+    return node && typeof node.animate === "function" ? node.animate(keyframes, options) : null
+}
+
+function prefetch(uri: string | undefined) {
+    if (uri) void Image.prefetch(uri).catch(() => undefined)
+}
+
 export const TVHeroCarousel = React.memo(function TVHeroCarousel({
     items,
     active = true,
@@ -43,54 +67,75 @@ export const TVHeroCarousel = React.memo(function TVHeroCarousel({
 }: Props) {
     const [index, setIndex] = React.useState(0)
     const [firstAction, setFirstAction] = React.useState<React.ElementRef<typeof Pressable> | null>(null)
-    const pauseUntil = React.useRef(0)
+    // Rotation waits while focus is on the hero's buttons, so they don't change under it.
+    const [focusInside, setFocusInside] = React.useState(false)
+    const containerRef = React.useRef<ViewNode>(null)
+    const textRef = React.useRef<ViewNode>(null)
     const keys = items.map(item => item.key).join(":")
+    const count = items.length
+    const rotating = active && count > 1 && !focusInside
 
     React.useEffect(() => {
         setIndex(0)
     }, [keys])
 
-    const move = React.useCallback((next: number, pause = true) => {
-        if (items.length <= 1) return
-        if (pause) pauseUntil.current = Date.now() + ROTATE_MS
-        setIndex((next + items.length) % items.length)
-    }, [items.length])
+    const move = React.useCallback((next: number) => {
+        if (count <= 1) return
+        setIndex((next + count) % count)
+    }, [count])
+
+    // One timer per slide: a manual change starts the wait over.
+    React.useEffect(() => {
+        if (!rotating) return
+        const timer = setTimeout(() => setIndex(current => (current + 1) % count), ROTATE_MS)
+        return () => clearTimeout(timer)
+    }, [count, index, rotating])
 
     React.useEffect(() => {
-        if (!active || items.length <= 1) return
+        if (Platform.OS !== "web") return
+        const node = containerRef.current as unknown as HTMLElement | null
+        if (!node) return
+        const onIn = () => setFocusInside(true)
+        const onOut = (event: FocusEvent) => {
+            if (!(event.relatedTarget instanceof Node) || !node.contains(event.relatedTarget)) setFocusInside(false)
+        }
+        node.addEventListener("focusin", onIn)
+        node.addEventListener("focusout", onOut)
+        return () => {
+            node.removeEventListener("focusin", onIn)
+            node.removeEventListener("focusout", onOut)
+        }
+    }, [count > 0])
 
-        const timer = setInterval(() => {
-            if (Date.now() < pauseUntil.current) return
-            setIndex(current => (current + 1) % items.length)
-        }, ROTATE_MS)
+    const item = count > 0 ? items[Math.min(index, count - 1)] : null
 
-        return () => clearInterval(timer)
-    }, [active, items.length])
+    // The next backdrop is decoded before its turn, so the cross-fade doesn't stall on it.
+    React.useEffect(() => {
+        if (count > 1) prefetch(items[(index + 1) % count]?.image)
+    }, [count, index, items])
 
-    if (items.length === 0) {
+    // The text eases in with each slide (it stays mounted: its buttons may hold focus).
+    const shownKey = React.useRef<string | null>(null)
+    React.useEffect(() => {
+        if (!item) return
+        const first = shownKey.current === null
+        shownKey.current = item.key
+        if (first) return
+        animate(textRef.current, [
+            { opacity: 0, transform: `translateY(${tvSize(18)}px)` },
+            { opacity: 1, transform: "translateY(0px)" },
+        ], { duration: TEXT_MS, easing: EASE_OUT })
+    }, [item?.key])
+
+    if (!item) {
         return loading ? <TVHeroSkeleton height={height} /> : null
     }
 
-    const item = items[Math.min(index, items.length - 1)]
+    const progress = Math.min(Math.max(item.progressPercent ?? 0, 0), 100)
 
     return (
-        <View
-            style={{
-                height,
-                overflow: "hidden",
-                backgroundColor: "#121212",
-            }}
-        >
-            {item.image ? (
-                <Image
-                    source={{ uri: item.image }}
-                    style={{ position: "absolute", inset: 0 }}
-                    contentFit="cover"
-                    cachePolicy="memory-disk"
-                    priority="high"
-                    transition={260}
-                />
-            ) : null}
+        <View ref={containerRef} style={{ height, overflow: "hidden", backgroundColor: "#121212" }}>
+            <HeroBackdrop itemKey={item.key} image={item.image} />
             <LinearGradient
                 colors={["rgba(10,10,10,0.97)", "rgba(10,10,10,0.62)", "rgba(10,10,10,0.08)"]}
                 locations={[0, 0.5, 1]}
@@ -104,62 +149,68 @@ export const TVHeroCarousel = React.memo(function TVHeroCarousel({
                 style={{ position: "absolute", inset: 0 }}
             />
 
+            {/* Anchored to the bottom: the buttons stay put whatever the title and text lengths. */}
             <View
                 style={{
                     position: "absolute",
                     top: TV.navInset,
-                    bottom: tvSize(72),
+                    bottom: tvSize(64),
                     left: 0,
                     width: "62%",
                     paddingHorizontal: TV.gutter,
-                    justifyContent: "center",
-                    gap: tvSize(10),
+                    justifyContent: "flex-end",
+                    gap: tvSize(18),
                 }}
             >
-                {/*{item.kicker ? (
+                <View ref={textRef} style={{ gap: tvSize(10) }}>
                     <Text
-                        className="font-medium text-gray-200/80"
-                        style={{ fontSize: tvSize(18), letterSpacing: tvSize(3) }}
+                        className="font-black text-white"
+                        style={{ fontSize: tvSize(52), lineHeight: tvSize(58) }}
+                        numberOfLines={2}
                     >
-                        {item.kicker}
+                        {item.title}
                     </Text>
-                ) : null}*/}
-                <Text
-                    className="font-black text-white"
-                    style={{ fontSize: tvSize(52), lineHeight: tvSize(58) }}
-                    numberOfLines={2}
-                >
-                    {item.title}
-                </Text>
-                {item.subtitle ? (
-                    <Text className="font-semibold text-white/90" style={{ fontSize: tvSize(24) }} numberOfLines={1}>
-                        {item.subtitle}
-                    </Text>
-                ) : null}
-                <View style={{ flexDirection: "row", alignItems: "center", gap: tvSize(12) }}>
-                    {item.score ? <TVScoreBadge score={item.score} kind="audience" /> : null}
-                    {item.meta ? (
-                        <Text className="font-medium text-white/60" style={{ fontSize: tvSize(20) }} numberOfLines={1}>
-                            {item.meta}
+                    {item.subtitle || progress > 0 ? (
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: tvSize(16) }}>
+                            {item.subtitle ? (
+                                <Text
+                                    className="font-semibold text-white/90"
+                                    style={{ fontSize: tvSize(24), flexShrink: 1 }}
+                                    numberOfLines={1}
+                                >
+                                    {item.subtitle}
+                                </Text>
+                            ) : null}
+                            {progress > 0 ? <HeroProgress percent={progress} label={item.progressLabel} /> : null}
+                        </View>
+                    ) : null}
+                    {item.score || item.meta ? (
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: tvSize(12) }}>
+                            {item.score ? <TVScoreBadge score={item.score} kind="audience" /> : null}
+                            {item.meta ? (
+                                <Text className="font-medium text-white/60" style={{ fontSize: tvSize(20) }} numberOfLines={1}>
+                                    {item.meta}
+                                </Text>
+                            ) : null}
+                        </View>
+                    ) : null}
+                    {item.description ? (
+                        <Text
+                            className="text-white/60"
+                            style={{ fontSize: tvSize(21), lineHeight: tvSize(30), maxWidth: tvSize(860) }}
+                            numberOfLines={2}
+                        >
+                            {item.description}
                         </Text>
                     ) : null}
                 </View>
-                {item.description ? (
-                    <Text
-                        className="text-white/60"
-                        style={{ fontSize: tvSize(21), lineHeight: tvSize(30), maxWidth: tvSize(860) }}
-                        numberOfLines={2}
-                    >
-                        {item.description}
-                    </Text>
-                ) : null}
 
                 <TVFocusGuideView
                     autoFocus={active}
                     destinations={firstAction ? [firstAction] : undefined}
                     trapFocusLeft
                     trapFocusRight
-                    style={{ flexDirection: "row", alignItems: "center", gap: tvSize(14), marginTop: tvSize(10) }}
+                    style={{ flexDirection: "row", alignItems: "center", gap: tvSize(14) }}
                 >
                     <TVButton
                         ref={setFirstAction}
@@ -179,18 +230,14 @@ export const TVHeroCarousel = React.memo(function TVHeroCarousel({
                             onPress={item.onSecondary}
                         />
                     ) : null}
-                    {items.length > 1 ? (
+                    {count > 1 ? (
                         <>
                             <TVPillButton
                                 label=""
                                 accessibilityLabel="Previous featured title"
                                 onPress={() => move(index - 1)}
                                 icon={(focused) => (
-                                    <Ionicons
-                                        name="chevron-back"
-                                        size={tvSize(22)}
-                                        color={focused ? "#000000" : "#ffffff"}
-                                    />
+                                    <Ionicons name="chevron-back" size={tvSize(22)} color={focused ? "#000000" : "#ffffff"} />
                                 )}
                             />
                             <TVPillButton
@@ -198,11 +245,7 @@ export const TVHeroCarousel = React.memo(function TVHeroCarousel({
                                 accessibilityLabel="Next featured title"
                                 onPress={() => move(index + 1)}
                                 icon={(focused) => (
-                                    <Ionicons
-                                        name="chevron-forward"
-                                        size={tvSize(22)}
-                                        color={focused ? "#000000" : "#ffffff"}
-                                    />
+                                    <Ionicons name="chevron-forward" size={tvSize(22)} color={focused ? "#000000" : "#ffffff"} />
                                 )}
                             />
                         </>
@@ -210,55 +253,153 @@ export const TVHeroCarousel = React.memo(function TVHeroCarousel({
                 </TVFocusGuideView>
             </View>
 
-            {items.length > 1 ? (
-                <View
-                    pointerEvents="none"
-                    style={{
-                        position: "absolute",
-                        right: TV.gutter,
-                        bottom: tvSize(28),
-                        flexDirection: "row",
-                        alignItems: "center",
-                        gap: tvSize(7),
-                    }}
-                >
-                    {items.map((hero, dot) => (
-                        <View
-                            key={hero.key}
-                            style={{
-                                width: tvSize(dot === index ? 34 : 10),
-                                height: tvSize(4),
-                                borderRadius: tvSize(2),
-                                backgroundColor: dot === index ? "#ffffff" : "rgba(255,255,255,0.3)",
-                            }}
-                        />
-                    ))}
-                    <Text className="font-semibold text-white/40" style={{ marginLeft: tvSize(6), fontSize: tvSize(16) }}>
-                        {index + 1}/{items.length}
-                    </Text>
-                </View>
-            ) : null}
-            {item.progressPercent && item.progressPercent > 0 ? (
-                <View
-                    pointerEvents="none"
-                    style={{
-                        position: "absolute",
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        height: tvSize(6),
-                        backgroundColor: "rgba(255,255,255,0.12)",
-                    }}
-                >
-                    <View
-                        style={{
-                            width: `${Math.min(item.progressPercent, 100)}%`,
-                            height: "100%",
-                            backgroundColor: "#8176ef",
-                        }}
-                    />
-                </View>
+            {count > 1 ? (
+                <HeroPager count={count} index={index} keys={items.map(hero => hero.key)} running={rotating} />
             ) : null}
         </View>
     )
 })
+
+/**
+ * The backdrop: the incoming image fades in over the outgoing one while
+ * settling from a slight zoom, then the outgoing one is dropped.
+ */
+function HeroBackdrop({ itemKey, image }: { itemKey: string; image?: string }) {
+    const [layers, setLayers] = React.useState<{ key: string; image?: string }[]>([{ key: itemKey, image }])
+
+    React.useEffect(() => {
+        setLayers((current) => {
+            const top = current[current.length - 1]
+            if (top?.key === itemKey && top.image === image) return current
+            return top ? [top, { key: itemKey, image }] : [{ key: itemKey, image }]
+        })
+    }, [image, itemKey])
+
+    const settle = React.useCallback((key: string) => {
+        setLayers(current => current.length > 1 && current[current.length - 1].key === key ? current.slice(-1) : current)
+    }, [])
+
+    return (
+        <>
+            {layers.map((layer, position) => (
+                <BackdropLayer
+                    key={layer.key}
+                    image={layer.image}
+                    entering={layers.length > 1 && position === layers.length - 1}
+                    onEntered={() => settle(layer.key)}
+                />
+            ))}
+        </>
+    )
+}
+
+function BackdropLayer({ image, entering, onEntered }: { image?: string; entering: boolean; onEntered: () => void }) {
+    const ref = React.useRef<ViewNode>(null)
+    const done = React.useRef(onEntered)
+    done.current = onEntered
+
+    React.useEffect(() => {
+        if (!entering) return
+        const animation = animate(ref.current, [
+            { opacity: 0, transform: "scale(1.06)" },
+            { opacity: 1, transform: "scale(1)" },
+        ], { duration: FADE_MS, easing: EASE_OUT })
+        if (!animation) {
+            done.current()
+            return
+        }
+        animation.onfinish = () => done.current()
+        return () => animation.cancel()
+    }, [entering])
+
+    return (
+        <View ref={ref} pointerEvents="none" style={{ position: "absolute", inset: 0 }}>
+            {image ? (
+                <Image
+                    source={{ uri: image }}
+                    style={{ position: "absolute", inset: 0 }}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
+                    priority="high"
+                    transition={entering ? 0 : 200}
+                />
+            ) : null}
+        </View>
+    )
+}
+
+/** Watch progress of the episode the hero plays: a short meter with what's left. */
+function HeroProgress({ percent, label }: { percent: number; label?: string }) {
+    return (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: tvSize(10), flexShrink: 0 }}>
+            <View
+                style={{
+                    width: tvSize(132),
+                    height: tvSize(6),
+                    borderRadius: tvSize(3),
+                    overflow: "hidden",
+                    backgroundColor: "rgba(255,255,255,0.18)",
+                }}
+            >
+                <View style={{ width: `${percent}%`, height: "100%", borderRadius: tvSize(3), backgroundColor: BRAND }} />
+            </View>
+            <Text className="font-semibold text-white/70" style={{ fontSize: tvSize(18) }} numberOfLines={1}>
+                {label ?? `${Math.round(percent)}% watched`}
+            </Text>
+        </View>
+    )
+}
+
+/**
+ * Page dots; the current one fills up over the time until the next slide
+ * (and stays full while rotation waits for focus to leave the hero).
+ */
+function HeroPager({ count, index, keys, running }: { count: number; index: number; keys: string[]; running: boolean }) {
+    const fillRef = React.useRef<ViewNode>(null)
+
+    React.useEffect(() => {
+        if (!running) return
+        const animation = animate(fillRef.current, [
+            { transform: "scaleX(0)" },
+            { transform: "scaleX(1)" },
+        ], { duration: ROTATE_MS, easing: "linear" })
+        return () => animation?.cancel()
+    }, [index, running])
+
+    return (
+        <View
+            pointerEvents="none"
+            style={{
+                position: "absolute",
+                right: TV.gutter,
+                bottom: tvSize(28),
+                flexDirection: "row",
+                alignItems: "center",
+                gap: tvSize(7),
+            }}
+        >
+            {keys.map((key, dot) => (
+                <View
+                    key={key}
+                    style={[{
+                        width: tvSize(dot === index ? 40 : 10),
+                        height: tvSize(4),
+                        borderRadius: tvSize(2),
+                        overflow: "hidden",
+                        backgroundColor: dot === index ? "rgba(255,255,255,0.35)" : "rgba(255,255,255,0.25)",
+                    }, Platform.OS === "web" ? DOT_TRANSITION : null]}
+                >
+                    {dot === index ? (
+                        <View ref={fillRef} style={{ width: "100%", height: "100%", backgroundColor: "#ffffff", transformOrigin: "left" }} />
+                    ) : null}
+                </View>
+            ))}
+            <Text className="font-semibold text-white/40" style={{ marginLeft: tvSize(6), fontSize: tvSize(16) }}>
+                {index + 1}/{count}
+            </Text>
+        </View>
+    )
+}
+
+/** Dots grow and shrink smoothly (a CSS transition, webOS only). */
+const DOT_TRANSITION = { transitionProperty: "width", transitionDuration: "320ms", transitionTimingFunction: EASE_OUT } as object

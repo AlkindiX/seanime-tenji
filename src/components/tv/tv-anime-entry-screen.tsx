@@ -10,6 +10,7 @@ import { tvReturnFocusAtom } from "@/atoms/anime-entry.atoms"
 import {
     TVButton,
     useTVFocus,
+    ROW_OVERFLOW,
     TV,
     tvSize,
     TVEpisodeCard,
@@ -656,7 +657,7 @@ export const TVAnimeEntryInfoView = React.memo(function TVAnimeEntryInfoView({
                             horizontal
                             data={characters}
                             keyExtractor={item => String(item.id || item.node?.id)}
-                            style={{ overflow: "visible" }}
+                            style={ROW_OVERFLOW}
                             contentContainerStyle={{
                                 paddingHorizontal: TV.gutter,
                                 paddingTop: tvSize(8),
@@ -846,7 +847,8 @@ const TVTabBar = React.memo(function TVTabBar({ tabs, activeKey, activeRef, onTa
                 {tabs.map((tab, index) => (
                     <TVTabButton
                         ref={activeKey === tab.key ? activeRef : undefined}
-                        preferred={index === 0}
+                        // Opening the page lands on the tab it shows, not always the first.
+                        preferred={activeKey === tab.key}
                         key={tab.key}
                         tabKey={tab.key}
                         label={tab.label}

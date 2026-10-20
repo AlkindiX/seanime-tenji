@@ -1,6 +1,7 @@
 import { useCurrentUser, useServerUrl } from "@/atoms/server.atoms"
 import { TVConfirmDrawer } from "@/components/tv/tv-confirm-drawer"
 import { usePreferredFocus, useTVFocus } from "@/components/tv/tv-focus"
+import { TVNavScrim } from "@/components/tv/tv-nav-scrim"
 import { TV, tvSize } from "@/components/tv/tv-scale"
 import { useServerConnectionState } from "@/lib/offline"
 import { checkForOtaUpdateManually, getOtaVersionInfo } from "@/lib/ota/updates"
@@ -369,6 +370,7 @@ export function TVSettingsScreen() {
 
                 </View>
             </ScrollView>
+            <TVNavScrim />
 
             <TVConfirmDrawer
                 open={confirm === "cache"}
