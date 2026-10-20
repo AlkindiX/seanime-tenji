@@ -1,4 +1,4 @@
-import { buildSeaQuery } from "@/api/client/requests"
+import { buildSeaQuery, isConnectivityError, isUntrustedOriginError } from "@/api/client/requests"
 import { hashServerPassword } from "@/api/client/server-auth"
 import { API_ENDPOINTS } from "@/api/generated/endpoints"
 import { useSetServerUrl } from "@/atoms/server.atoms"
@@ -25,6 +25,8 @@ export default function Screen() {
     const [passwordValue, setPasswordValue] = React.useState("")
     const [passwordRequired, setPasswordRequired] = React.useState(false)
     const [isSubmitting, setIsSubmitting] = React.useState(false)
+    // TV only: a toast is gone before it can be read from across the room
+    const [tvError, setTvError] = React.useState<string | null>(null)
     const setServerUrl = useSetServerUrl()
 
     // React.useEffect(() => {
@@ -60,6 +62,7 @@ export default function Screen() {
             const hashedPassword = trimmedPassword ? hashServerPassword(trimmedPassword) : null
 
             setIsSubmitting(true)
+            setTvError(null)
 
             logger("set-server-url").info("Setting server url:", sanitizedUrl)
 
@@ -91,18 +94,27 @@ export default function Screen() {
                         ? error.error
                         : "Unable to connect to the server")
 
+                const showError = (text: string) => Platform.isTV ? setTvError(text) : showErrorToast(text)
+
                 if (message === "UNAUTHENTICATED") {
                     if (trimmedPassword) {
-                        showErrorToast("Server password is incorrect")
+                        showError("Server password is incorrect")
                     } else if (Platform.isTV) {
                         setPasswordRequired(true)
                     } else {
                         showErrorToast("This server requires a password")
                     }
-                } else if (message.includes("Network request failed") || message.includes("Failed to fetch")) {
-                    showErrorToast("Could not reach the server")
+                } else if (isUntrustedOriginError(error)) {
+                    showError("This server has no password, so it turns the TV app away. Set a server password in Seanime "
+                        + "([server] password in config.toml), restart the server, then connect again.")
+                } else if (isConnectivityError(error)) {
+                    showError(Platform.isTV
+                        ? `Could not reach ${sanitizedUrl}. Check that the server is running and has a password (the TV app `
+                        + "needs one), that it listens on your network (host 0.0.0.0, not 127.0.0.1) and that the computer's "
+                        + "firewall lets this port in."
+                        : "Could not reach the server")
                 } else {
-                    showErrorToast(message)
+                    showError(message)
                 }
             }
             finally {
@@ -118,11 +130,19 @@ export default function Screen() {
                 password={passwordValue}
                 passwordRequired={passwordRequired}
                 submitting={isSubmitting}
-                onServerUrlChange={setInputValue}
-                onPasswordChange={setPasswordValue}
+                error={tvError}
+                onServerUrlChange={value => {
+                    setInputValue(value)
+                    setTvError(null)
+                }}
+                onPasswordChange={value => {
+                    setPasswordValue(value)
+                    setTvError(null)
+                }}
                 onBackToServer={() => {
                     setPasswordRequired(false)
                     setPasswordValue("")
+                    setTvError(null)
                 }}
                 onContinue={handleOnContinue}
             />

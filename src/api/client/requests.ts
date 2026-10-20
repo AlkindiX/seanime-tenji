@@ -57,6 +57,25 @@ function normalizeSeaError(error: unknown): SeaError {
     return createSeaError("Unknown error occurred")
 }
 
+// A server without a password answers 403 to requests from origins it doesn't trust.
+// The webOS app runs from file://, so every request it sends has `Origin: null`.
+export function isUntrustedOriginError(error: unknown): boolean {
+    if (typeof error !== "object" || error === null) return false
+    const { status, error: message } = error as Partial<SeaError>
+    return status === 403 && typeof message === "string" && message.includes("trusted local origin")
+}
+
+export function isConnectivityError(error: unknown): boolean {
+    const message = (typeof error === "object" && error !== null && "error" in error && typeof error.error === "string")
+        ? error.error.toLowerCase()
+        : ""
+    return message.includes("network request failed")
+        || message.includes("failed to fetch")
+        || message.includes("load failed")
+        || message.includes("network error")
+        || message.includes("timed out")
+}
+
 function isConnectivityFailure(error: unknown, seaError: SeaError): boolean {
     if (seaError.status !== undefined) return false
 

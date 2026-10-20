@@ -1,3 +1,4 @@
+import { isUntrustedOriginError } from "@/api/client/requests"
 import { ApiLoaders } from "@/api/components/api-loaders"
 import { useGetSettings } from "@/api/hooks/settings.hooks"
 import { useGetStatus } from "@/api/hooks/status.hooks"
@@ -9,7 +10,7 @@ import { useManualOfflineMode } from "@/lib/offline"
 import { isServerVersionSupported, MIN_SERVER_VERSION } from "@/lib/server-version"
 import { router, usePathname } from "expo-router"
 import React from "react"
-import { Alert, Image, View } from "react-native"
+import { Alert, Image, Platform, View } from "react-native"
 
 export function ServerUrlWrapper({ children }: { children: React.ReactNode }) {
 
@@ -49,7 +50,9 @@ export function ServerDataWrapper({ children }: { children: React.ReactNode }) {
 
     const [manualOffline, setManualOffline] = useManualOfflineMode()
 
-    const { data: _serverStatus, isLoading } = useGetStatus({ enabled: !manualOffline })
+    const { data: _serverStatus, isLoading, error: statusError } = useGetStatus({ enabled: !manualOffline })
+    // A server without a password refuses the webOS app (Origin: null), whatever is cached
+    const serverRefusesClient = !manualOffline && !_serverStatus && isUntrustedOriginError(statusError)
 
     React.useEffect(() => {
         if (_serverStatus) {
@@ -66,7 +69,7 @@ export function ServerDataWrapper({ children }: { children: React.ReactNode }) {
     })
     const isInvalidServerAuth = authVerification.error?.error === "UNAUTHENTICATED"
 
-    const isConnectingOrAuthenticating = !manualOffline && (
+    const isConnectingOrAuthenticating = !manualOffline && !serverRefusesClient && (
         (isLoading && !effectiveStatus) ||
         (requiresServerAuth && (!serverAuthToken || authVerification.isLoading || isInvalidServerAuth))
     )
@@ -87,6 +90,13 @@ export function ServerDataWrapper({ children }: { children: React.ReactNode }) {
     }, [isConnectingOrAuthenticating])
 
     const handleChangeUrlPress = React.useCallback(() => {
+        // react-native-web's Alert.alert does nothing, so on webOS the button would never respond
+        if (Platform.OS === "web") {
+            setServerUrl(null)
+            router.push("/(out)/set-server-url")
+            return
+        }
+
         Alert.alert(
             "Change server URL?",
             "The setup screen has no back action. You will need to complete server setup before returning to the app.",
@@ -119,6 +129,26 @@ export function ServerDataWrapper({ children }: { children: React.ReactNode }) {
         </ApiLoaders>
     }
 
+    if (serverRefusesClient) {
+        return <View className="bg-background flex-1 justify-center items-center gap-6 px-8">
+            <Image source={IMAGES.logo2} style={{ width: 128, height: 128 }} resizeMode="contain" />
+            <View className="items-center gap-1.5 max-w-2xl">
+                <Text className="text-white text-base font-semibold">The server needs a password</Text>
+                <Text className="text-white/45 text-sm text-center">
+                    This server has no password, so it turns this app away. Set a server password in Seanime
+                    ([server] password in config.toml), restart the server, then enter the address again.
+                </Text>
+            </View>
+            <Button
+                variant="default"
+                className="w-full max-w-xs z-[50] shadow shadow-foreground/5 rounded-full"
+                onPress={handleChangeUrlPress}
+            >
+                <Text>Change URL</Text>
+            </Button>
+        </View>
+    }
+
     if (isConnectingOrAuthenticating && showOfflineFallback) {
         return <View className="bg-background flex-1 justify-center items-center gap-6 px-8">
             <Image source={IMAGES.logo2} style={{ width: 128, height: 128 }} resizeMode="contain" />
@@ -126,6 +156,11 @@ export function ServerDataWrapper({ children }: { children: React.ReactNode }) {
                 <Text className="text-white text-base font-semibold">Connection is taking longer than expected</Text>
                 <Text className="text-white/45 text-sm text-center">The server might be offline. You can switch to offline mode or update the server
                                                                     URL.</Text>
+                {Platform.OS === "web" && (
+                    <Text className="text-white/45 text-sm text-center">
+                        On a TV, the server also needs a password, and the computer's firewall has to let its port in.
+                    </Text>
+                )}
             </View>
             <View className="gap-3 w-full items-center">
                 <Button

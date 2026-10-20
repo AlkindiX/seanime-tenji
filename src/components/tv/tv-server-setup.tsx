@@ -21,6 +21,7 @@ type TVServerSetupProps = {
     password: string
     passwordRequired: boolean
     submitting: boolean
+    error?: string | null
     onServerUrlChange: (value: string) => void
     onPasswordChange: (value: string) => void
     onBackToServer: () => void
@@ -161,6 +162,7 @@ export function TVServerSetup({
     password,
     passwordRequired,
     submitting,
+    error,
     onServerUrlChange,
     onPasswordChange,
     onBackToServer,
@@ -255,6 +257,26 @@ export function TVServerSetup({
 
                     <View style={{ gap: tvSize(18) }}>
                         {field}
+                        {!!error && (
+                            <View
+                                accessibilityLiveRegion="polite"
+                                style={{
+                                    flexDirection: "row",
+                                    alignItems: "flex-start",
+                                    gap: tvSize(12),
+                                    padding: tvSize(16),
+                                    borderRadius: tvSize(12),
+                                    backgroundColor: "rgba(248,113,113,0.12)",
+                                    borderWidth: tvSize(1),
+                                    borderColor: "rgba(248,113,113,0.35)",
+                                }}
+                            >
+                                <Ionicons name="alert-circle-outline" size={tvSize(24)} color="#fca5a5" />
+                                <Text style={{ flex: 1, color: "#fecaca", fontSize: tvSize(19), lineHeight: tvSize(27) }}>
+                                    {error}
+                                </Text>
+                            </View>
+                        )}
                         <TVButton
                             label={submitting ? "Connecting…" : "Connect"}
                             variant="primary"
