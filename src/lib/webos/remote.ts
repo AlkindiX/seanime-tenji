@@ -6,6 +6,7 @@
  * focus movement, `useTVEventHandler` events and `hardwareBackPress`.
  */
 import { createWheelStepper, isDigitEventType, remoteEventType } from "./remote-input"
+import { animateScroll, stopScroll } from "./scroll-animator"
 import {
     type Direction,
     focusElement,
@@ -36,6 +37,7 @@ export type TVRemoteEvent = {
 
 type Listener = (event: TVRemoteEvent) => void
 type PointerListener = () => void
+type ClickListener = () => void
 
 /** webOS sends 461 for Back; Escape and Backspace stand in for it on a desktop. */
 const BACK_KEY_CODE = 461
@@ -47,6 +49,7 @@ const PRESS_AND_RELEASE_TYPES = new Set(["left", "right", "up", "down", "select"
 
 const listeners = new Set<Listener>()
 const pointerListeners = new Set<PointerListener>()
+const clickListeners = new Set<ClickListener>()
 const backListeners: Array<() => boolean | null | undefined> = []
 let fallbackBackHandler: (() => boolean) | null = null
 const modalStack: Array<{ close: () => void }> = []
@@ -278,12 +281,150 @@ function onMouseMove(event: MouseEvent) {
     notifyPointerActivity(false)
 }
 
-function onMouseDown() {
+function onMouseDown(event: MouseEvent) {
     if (!pointerMode) setPointerMode(true)
     notifyPointerActivity(true)
+    // No autoscroll cursor for a middle button; it pauses and plays instead.
+    if (event.button === 1) event.preventDefault()
 }
 
 const HOVER_FOCUSABLE = "[tabindex]:not([tabindex=\"-1\"]),input,textarea,button,a[href]"
+
+/**
+ * Called when the Magic Remote clicks somewhere that isn't a control (the
+ * video in the player), or presses a middle button. The wheel is the OK
+ * button: with the pointer showing, pressing it clicks where it points.
+ */
+export function onPointerClick(listener: ClickListener) {
+    clickListeners.add(listener)
+    return () => {
+        clickListeners.delete(listener)
+    }
+}
+
+function emitPointerClick() {
+    for (const listener of Array.from(clickListeners)) {
+        try {
+            listener()
+        } catch (error) {
+            console.error("[webOS] pointer click listener failed", error)
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Dragging lists with the pointer
+///////////////////////////////////////////////////////////////////////////////
+
+/** Travel before a press becomes a drag; less is a click from an unsteady hand. */
+const DRAG_THRESHOLD_PX = 12
+/** Speed is measured over the last part of a drag. */
+const FLING_SAMPLE_MS = 100
+/** A released drag glides on by its speed (px/ms) times this. */
+const FLING_MS = 280
+/** Slower than this (px/ms), a release just stops. */
+const FLING_MIN_SPEED = 0.25
+/** The click that ends a drag arrives right after the release. */
+const SWALLOW_CLICK_MS = 400
+
+type Drag = {
+    startX: number
+    startY: number
+    target: Element
+    scroller: HTMLElement | null
+    axis: "x" | "y"
+    origin: number
+    samples: Array<{ time: number; position: number }>
+}
+
+let drag: Drag | null = null
+let swallowClickUntil = 0
+
+function onDragStart(event: MouseEvent) {
+    drag = null
+    if (event.button !== 0 || !(event.target instanceof Element) || isTextField(event.target)) return
+    drag = { startX: event.clientX, startY: event.clientY, target: event.target, scroller: null, axis: "x", origin: 0, samples: [] }
+}
+
+function onDragMove(event: MouseEvent) {
+    const current = drag
+    if (!current) return
+    // The release happened somewhere we didn't see it (outside the window).
+    if ((event.buttons & 1) === 0) {
+        endDrag(event.timeStamp)
+        return
+    }
+
+    let scroller = current.scroller
+    if (!scroller) {
+        const dx = event.clientX - current.startX
+        const dy = event.clientY - current.startY
+        if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return
+        // A row drags sideways, the page up and down: whichever way the pointer went most.
+        const axis = Math.abs(dx) >= Math.abs(dy) ? "x" : "y"
+        scroller = scrollableAncestor(current.target, axis)
+        if (!scroller) {
+            drag = null
+            return
+        }
+        stopScroll(scroller)
+        current.axis = axis
+        current.scroller = scroller
+        current.origin = axis === "x" ? scroller.scrollLeft : scroller.scrollTop
+        document.documentElement.toggleAttribute("data-tv-dragging", true)
+    }
+
+    // The list follows the pointer, less the threshold so it doesn't jump when the drag starts.
+    const travel = current.axis === "x" ? event.clientX - current.startX : event.clientY - current.startY
+    const position = current.origin - Math.sign(travel) * Math.max(0, Math.abs(travel) - DRAG_THRESHOLD_PX)
+    if (current.axis === "x") scroller.scrollLeft = position
+    else scroller.scrollTop = position
+
+    current.samples.push({ time: event.timeStamp, position })
+    while (current.samples.length > 2 && event.timeStamp - current.samples[0].time > FLING_SAMPLE_MS) current.samples.shift()
+    window.getSelection()?.removeAllRanges()
+    event.preventDefault()
+}
+
+function endDrag(time: number) {
+    const current = drag
+    drag = null
+    if (!current?.scroller) return
+    document.documentElement.toggleAttribute("data-tv-dragging", false)
+    swallowClickUntil = performance.now() + SWALLOW_CLICK_MS
+
+    const first = current.samples[0]
+    const last = current.samples[current.samples.length - 1]
+    if (!first || !last || last.time === first.time || time - last.time > FLING_SAMPLE_MS) return
+    const speed = (last.position - first.position) / (last.time - first.time)
+    if (Math.abs(speed) < FLING_MIN_SPEED) return
+    const glide = last.position + speed * FLING_MS
+    animateScroll(current.scroller, current.axis === "x" ? { x: glide } : { y: glide })
+}
+
+function onDragEnd(event: MouseEvent) {
+    if (event.button === 0) endDrag(event.timeStamp)
+}
+
+/** Clicks: none after a drag (it would open the card it ended on); the rest may be a pointer click. */
+function onClick(event: MouseEvent) {
+    if (performance.now() < swallowClickUntil) {
+        swallowClickUntil = 0
+        event.preventDefault()
+        event.stopPropagation()
+        return
+    }
+    if (!pointerMode || !(event.target instanceof Element)) return
+    if (event.target.closest(HOVER_FOCUSABLE)) return
+    emitPointerClick()
+}
+
+/** A middle button, where a pointing device has one, acts on the screen as a whole. */
+function onAuxClick(event: MouseEvent) {
+    if (event.button !== 1) return
+    event.preventDefault()
+    emitPointerClick()
+}
 
 /**
  * With the Magic Remote pointer, focus follows the cursor so TV highlights
@@ -293,7 +434,8 @@ const HOVER_FOCUSABLE = "[tabindex]:not([tabindex=\"-1\"]),input,textarea,button
  * focuses the field itself.
  */
 function onPointerOver(event: MouseEvent) {
-    if (!pointerMode || !(event.target instanceof Element)) return
+    // Cards passing under a dragging pointer don't take focus.
+    if (!pointerMode || drag?.scroller || !(event.target instanceof Element)) return
     let target = event.target.closest<HTMLElement>(HOVER_FOCUSABLE)
     while (target && isTextField(target)) target = target.parentElement?.closest<HTMLElement>(HOVER_FOCUSABLE) ?? null
     if (target && target !== document.activeElement && !isTextField(document.activeElement)) {
@@ -387,8 +529,16 @@ export function installRemote() {
         if (event.target instanceof Element) trackFocus(event.target)
     }, true)
     document.addEventListener("mousemove", onMouseMove, { passive: true })
-    document.addEventListener("mousedown", onMouseDown, { capture: true, passive: true })
+    document.addEventListener("mousedown", onMouseDown, { capture: true, passive: false })
     document.addEventListener("mouseover", onPointerOver, true)
+    document.addEventListener("mousedown", onDragStart, true)
+    document.addEventListener("mousemove", onDragMove, { capture: true, passive: false })
+    window.addEventListener("mouseup", onDragEnd, true)
+    // Before react-native-web's handlers, which press a Pressable on click.
+    window.addEventListener("click", onClick, true)
+    window.addEventListener("auxclick", onAuxClick, true)
+    // Images would start the browser's own drag and drop instead.
+    document.addEventListener("dragstart", event => event.preventDefault(), true)
     window.addEventListener("wheel", onWheel, { capture: true, passive: false })
     onCursorVisibilityChange(setPointerMode)
     // A system overlay took the pointer: show the D-pad focus again.

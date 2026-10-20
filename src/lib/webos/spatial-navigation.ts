@@ -8,6 +8,8 @@
  * (remember the last focused child) and `destinations`.
  */
 
+import { animateScroll, scrollTarget } from "./scroll-animator"
+
 export type Direction = "up" | "down" | "left" | "right"
 
 export type FocusGuideConfig = {
@@ -168,13 +170,20 @@ function minorDistance(from: Rect, to: Rect, direction: Direction) {
     return Math.abs((from.left + from.right) / 2 - (to.left + to.right) / 2)
 }
 
-function pickBest<T extends Element>(from: Rect, candidates: T[], direction: Direction): T | null {
-    let best: T | null = null
-    let bestInBeam = false
-    let bestScore = Number.POSITIVE_INFINITY
+type Ranked<T> = { element: T; beam: boolean; score: number }
 
-    for (const candidate of candidates) {
-        const rect = rectOf(candidate)
+/**
+ * The elements lying in `direction`, best first. Only geometry is looked at
+ * here (one rect each); whether an element can really take focus is checked
+ * by the caller in this order, so usually only for the first one. Checking
+ * every focusable on the screen up front cost a style and ancestor walk per
+ * element on each key press.
+ */
+function rankCandidates<T extends Element>(from: Rect, elements: Iterable<T>, direction: Direction): Ranked<T>[] {
+    const ranked: Ranked<T>[] = []
+    for (const element of elements) {
+        const rect = rectOf(element)
+        if (rect.right - rect.left <= 0 || rect.bottom - rect.top <= 0) continue
         if (!isCandidate(from, rect, direction)) continue
 
         const beam = inBeam(from, rect, direction)
@@ -182,15 +191,10 @@ function pickBest<T extends Element>(from: Rect, candidates: T[], direction: Dir
         const minor = minorDistance(from, rect, direction)
         // Elements sharing the row/column always win over diagonal ones.
         const score = beam ? major * 1000 + minor : 13 * major * major + minor * minor
-
-        if ((beam && !bestInBeam) || (beam === bestInBeam && score < bestScore)) {
-            best = candidate
-            bestInBeam = beam
-            bestScore = score
-        }
+        ranked.push({ element, beam, score })
     }
-
-    return best
+    // Stable: equal scores keep document order, as before.
+    return ranked.sort((a, b) => Number(b.beam) - Number(a.beam) || a.score - b.score)
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -223,7 +227,19 @@ export function nearestScroller(el: Element): { node: HTMLElement; x: boolean; y
     return null
 }
 
-/** Scrolls every scrollable ancestor so the element sits away from the edges. */
+/** The scroll offset that keeps the span [from, to] at least `margin` inside [start, start + size]. */
+function revealSpan(start: number, size: number, from: number, to: number, margin: number) {
+    if (from - margin < start) return from - margin
+    if (to + margin > start + size) return to + margin - size
+    return start
+}
+
+/**
+ * Scrolls every scrollable ancestor so the element sits away from the edges.
+ * Measured against where each scroller is heading rather than where it is,
+ * so presses arriving mid-scroll (a held key) extend the movement instead of
+ * overshooting it.
+ */
 export function revealElement(el: HTMLElement) {
     const target = el.getBoundingClientRect()
 
@@ -233,22 +249,23 @@ export function revealElement(el: HTMLElement) {
         if (!scrollX && !scrollY) continue
 
         const box = node.getBoundingClientRect()
-        let dx = 0
-        let dy = 0
+        const heading = scrollTarget(node)
+        const next: { x?: number; y?: number } = {}
 
         if (scrollX) {
+            // Where the element sits in the scroller's content.
+            const left = target.left - box.left + node.scrollLeft
             const margin = Math.min(box.width * 0.12, 160)
-            if (target.left < box.left + margin) dx = target.left - box.left - margin
-            else if (target.right > box.right - margin) dx = target.right - box.right + margin
+            next.x = revealSpan(heading.x, node.clientWidth, left, left + target.width, margin)
         }
         if (scrollY) {
+            const top = target.top - box.top + node.scrollTop
             const margin = Math.min(box.height * 0.2, 200)
-            if (target.top < box.top + margin) dy = target.top - box.top - margin
-            else if (target.bottom > box.bottom - margin) dy = target.bottom - box.bottom + margin
+            next.y = revealSpan(heading.y, node.clientHeight, top, top + target.height, margin)
         }
 
-        if (dx !== 0 || dy !== 0) {
-            node.scrollBy({ left: dx, top: dy, behavior: "smooth" })
+        if ((next.x ?? heading.x) !== heading.x || (next.y ?? heading.y) !== heading.y) {
+            animateScroll(node, next)
         }
     }
 }
@@ -316,18 +333,23 @@ export function moveFocus(direction: Direction, options: { reveal?: boolean } = 
         }
     }
 
-    const candidates: HTMLElement[] = focusablesIn(scope, root)
-        .filter(el => el !== current && !current.contains(el) && !inHiddenScreen(el))
-
+    const elements: HTMLElement[] = Array.from(scope.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+        .filter(el => el !== current && !current.contains(el))
     // Guides with destinations act as focusable regions even when empty.
     for (const guide of Array.from(scope.querySelectorAll<HTMLElement>(`[${GUIDE_ATTRIBUTE}]`))) {
-        const entry = guides.get(guide)
-        if (entry?.config.destinations?.length && !guide.contains(current) && isRendered(guide) && !inHiddenScreen(guide)) {
-            candidates.push(guide)
-        }
+        if (guides.get(guide)?.config.destinations?.length && !guide.contains(current)) elements.push(guide)
     }
 
-    const best = pickBest(rectOf(current), candidates, direction)
+    let best: HTMLElement | null = null
+    for (const { element } of rankCandidates(rectOf(current), elements, direction)) {
+        const usable = element.hasAttribute(GUIDE_ATTRIBUTE) && !element.matches(FOCUSABLE_SELECTOR)
+            ? isRendered(element)
+            : isFocusable(element, root)
+        if (usable && !inHiddenScreen(element)) {
+            best = element
+            break
+        }
+    }
     if (!best) return false
 
     return focusElement(redirectIntoGuides(best, current, root), options)
