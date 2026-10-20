@@ -1,5 +1,5 @@
 import type { Anime_Episode } from "@/api/generated/types"
-import { TV, tvSize } from "@/components/tv/tv-scale"
+import { EPISODE_ROW_LAYOUT, ROW_OVERFLOW, TV, tvSize } from "@/components/tv/tv-scale"
 import { TVSectionHeader } from "@/components/tv/tv-section-header"
 import * as React from "react"
 import { FlatList, TVFocusGuideView, View } from "react-native"
@@ -46,10 +46,11 @@ export const TVEpisodeShelf = React.memo(function TVEpisodeShelf({
                     horizontal
                     data={episodes}
                     renderItem={renderItem}
+                    getItemLayout={EPISODE_ROW_LAYOUT}
                     keyExtractor={(item, index) => item.localFile?.path || `${item.type}-${item.episodeNumber}-${index}`}
                     snapToAlignment="item"
                     snapToItemPadding={TV.gutter}
-                    style={{ flexGrow: 0, overflow: "visible" }}
+                    style={[{ flexGrow: 0 }, ROW_OVERFLOW]}
                     contentContainerStyle={{
                         paddingHorizontal: TV.gutter,
                         paddingTop: tvSize(10),

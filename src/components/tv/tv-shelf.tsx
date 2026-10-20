@@ -6,7 +6,7 @@ import type {
 } from "@/api/generated/types"
 import { TVMediaCard } from "@/components/tv/tv-media-card"
 import { TVSectionHeader } from "@/components/tv/tv-section-header"
-import { TV, tvSize } from "@/components/tv/tv-scale"
+import { MEDIA_ROW_LAYOUT, TV, tvSize } from "@/components/tv/tv-scale"
 import { router } from "expo-router"
 import * as React from "react"
 import { FlatList, TVFocusGuideView, View } from "react-native"
@@ -83,6 +83,7 @@ export const TVShelf = React.memo(function TVShelf({
                     data={media}
                     renderItem={renderItem}
                     keyExtractor={item => String(item.id)}
+                    getItemLayout={MEDIA_ROW_LAYOUT}
                     snapToAlignment="item"
                     snapToItemPadding={TV.gutter}
                     style={{ flexGrow: 0 }}

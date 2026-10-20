@@ -1,6 +1,6 @@
 import { Status } from "@/api/generated/types"
 import { createAtomStorage, getStoredJsonValue } from "@/atoms/storage"
-import { useAtomValue, useSetAtom } from "jotai"
+import { atom, useAtomValue, useSetAtom } from "jotai"
 import { atomWithStorage } from "jotai/utils"
 
 /**
@@ -61,4 +61,21 @@ export function useCurrentUser() {
 
 export function useSetServerStatus() {
     return useSetAtom(serverStatusAtom)
+}
+
+/**
+ * The status settings a media card shows. Read one by one, a card re-renders
+ * when that value changes rather than whenever the status is refetched; a
+ * screen holds dozens of cards.
+ */
+const showAnimeUnwatchedCountAtom = atom(get => get(serverStatusAtom)?.themeSettings?.showAnimeUnwatchedCount ?? true)
+const hideAudienceScoreAtom = atom(get => !!get(serverStatusAtom)?.settings?.anilist?.hideAudienceScore)
+const blurAdultContentAtom = atom(get => !!get(serverStatusAtom)?.settings?.anilist?.blurAdultContent)
+
+export function useMediaCardSettings() {
+    return {
+        showUnwatchedCount: useAtomValue(showAnimeUnwatchedCountAtom),
+        hideAudienceScore: useAtomValue(hideAudienceScoreAtom),
+        blurAdultContent: useAtomValue(blurAdultContentAtom),
+    }
 }

@@ -5,15 +5,15 @@ import type {
     Anime_NakamaEntryLibraryData,
 } from "@/api/generated/types"
 import { useAnimeLibraryEntryDataValue, useMediaEntryListDataValue } from "@/atoms/anilist-collection.atoms"
-import { useServerStatus } from "@/atoms/server.atoms"
-import { usePreferredFocus, useTVFocus } from "@/components/tv/tv-focus"
+import { useMediaCardSettings } from "@/atoms/server.atoms"
+import { TVFocusScaleView, usePreferredFocus, useTVFocus } from "@/components/tv/tv-focus"
 import { TVScoreBadge } from "@/components/tv/tv-score-badge"
 import { TV, tvSize } from "@/components/tv/tv-scale"
 import { Ionicons } from "@/lib/icons/Ionicons"
 import { animeCardStats, mediaTitle } from "@/lib/media-metadata"
 import { Image } from "expo-image"
 import * as React from "react"
-import { Animated, Pressable, Text, View } from "react-native"
+import { Pressable, Text, View } from "react-native"
 
 type TVMediaCardProps = {
     media: AL_BaseAnime
@@ -43,7 +43,7 @@ export const TVMediaCard = React.memo(function TVMediaCard({
     hideLibraryBadge,
 }: TVMediaCardProps) {
     const focusState = useTVFocus(1.055, mediaTitle(media))
-    const serverStatus = useServerStatus()
+    const cardSettings = useMediaCardSettings()
     const syncedList = useMediaEntryListDataValue("anime", media.id) as Anime_EntryListData | undefined
     const syncedLibrary = useAnimeLibraryEntryDataValue(media.id)
     const list = syncedList ?? listProp
@@ -53,9 +53,9 @@ export const TVMediaCard = React.memo(function TVMediaCard({
     const image = media.coverImage?.extraLarge
         ?? media.coverImage?.large
         ?? media.coverImage?.medium
-    const showUnwatched = serverStatus?.themeSettings?.showAnimeUnwatchedCount ?? true
-    const hideAudienceScore = serverStatus?.settings?.anilist?.hideAudienceScore ?? false
-    const blurAdult = !!serverStatus?.settings?.anilist?.blurAdultContent && !!media.isAdult
+    const showUnwatched = cardSettings.showUnwatchedCount
+    const hideAudienceScore = cardSettings.hideAudienceScore
+    const blurAdult = cardSettings.blurAdultContent && !!media.isAdult
     const stats = animeCardStats(media, list, library, nakama, showUnwatched)
     const showLibrary = !hideLibraryBadge && stats.files > 0
     const showScore = showAudienceScore && !hideAudienceScore && !!media.meanScore
@@ -73,7 +73,7 @@ export const TVMediaCard = React.memo(function TVMediaCard({
             accessibilityLabel={title}
             style={{ width }}
         >
-            <Animated.View style={focusState.style}>
+            <TVFocusScaleView style={focusState.style}>
                 <View
                     style={{
                         width,
@@ -209,7 +209,7 @@ export const TVMediaCard = React.memo(function TVMediaCard({
                 >
                     {[media.seasonYear, media.format?.replaceAll("_", " ")].filter(Boolean).join(" · ")}
                 </Text>
-            </Animated.View>
+            </TVFocusScaleView>
         </Pressable>
     )
 })

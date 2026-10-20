@@ -1,10 +1,10 @@
-import { usePreferredFocus, useTVFocus } from "@/components/tv/tv-focus"
+import { TVFocusScaleView, usePreferredFocus, useTVFocus } from "@/components/tv/tv-focus"
 import { TV, tvSize } from "@/components/tv/tv-scale"
 import { Image } from "expo-image"
 import { LinearGradient } from "expo-linear-gradient"
 import { Ionicons } from "@/lib/icons/Ionicons"
 import * as React from "react"
-import { Animated, Pressable, type PressableProps, Text, View } from "react-native"
+import { Pressable, type PressableProps, Text, View } from "react-native"
 
 export interface TVEpisodeCardProps extends Omit<PressableProps, "onPress"> {
     image?: string
@@ -56,7 +56,7 @@ export const TVEpisodeCard = React.memo(
                     style={{ width }}
                     {...props}
                 >
-                    <Animated.View style={focus.style}>
+                    <TVFocusScaleView style={focus.style}>
                         <View
                             style={{
                                 width,
@@ -191,7 +191,7 @@ export const TVEpisodeCard = React.memo(
                                 {subtitle}
                             </Text>
                         ) : null}
-                    </Animated.View>
+                    </TVFocusScaleView>
                 </Pressable>
             )
         })
