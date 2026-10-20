@@ -70,6 +70,8 @@ export function TVAnimeEntryScreen({
     const tabRef = React.useRef<FocusNode>(null)
     const editRef = React.useRef<FocusNode>(null)
     const playRef = React.useRef<FocusNode>(null)
+    /** webOS: "Resume" on the stream the player left, shown in the torrent tab. */
+    const resumeRef = React.useRef<FocusNode>(null)
 
     const activeView = tvEntryView(currentView ?? localView)
     const setActiveView = React.useCallback((view: AnimeEntryView) => {
@@ -254,7 +256,9 @@ export function TVAnimeEntryScreen({
 
         const timer = setTimeout(() => {
             const episode = episodeRefs.current.get(`${savedView}:${returnFocus.episodeNumber}`)
-            const target = episode ?? tabRef.current ?? playRef.current ?? editRef.current
+            // Back from the player: one press goes back into a stream it left running.
+            const resume = savedView === "torrentstream" ? resumeRef.current : null
+            const target = episode ?? resume ?? tabRef.current ?? playRef.current ?? editRef.current
             requestTVFocus(target)
             setReturnFocus(null)
         }, 120)
@@ -559,7 +563,7 @@ export function TVAnimeEntryScreen({
                     ) : null}
 
                     {activeView === "torrentstream" && (
-                        <AnimeEntryTorrentStreamSection entry={entry} />
+                        <AnimeEntryTorrentStreamSection entry={entry} resumeRef={resumeRef} />
                     )}
 
                     {activeView === "onlinestream" && (

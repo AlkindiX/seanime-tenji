@@ -18,10 +18,11 @@ import { toast } from "@/lib/utils/toast"
 import { useQueryClient } from "@tanstack/react-query"
 import { useRouter } from "expo-router"
 import { atom, useAtom } from "jotai"
-import { useAtomValue } from "jotai/react"
+import { useAtomValue, useSetAtom } from "jotai/react"
 import React from "react"
 import { Platform } from "react-native"
 import { MPVCORE_EVENT, NATIVE_PLAYER_EVENT, type NativePlayerServerEvent, parseNativePlayerEvent, terminateDirectStream } from "./direct-stream"
+import { forgetKeptStream, type KeptDirectStream } from "./kept-direct-stream"
 import { openExternalPlayerURL } from "./external-players"
 import { getPlayerPreferences } from "./player-preferences"
 import type { AnimeEntryLaunchView, MobilePlaybackSource, PlayerNextEpisodeAction } from "./types"
@@ -30,6 +31,8 @@ export const currentPlaybackSourceAtom = atom<MobilePlaybackSource | null>(null)
 
 /** How long after a new start a torrent "stopped" is taken to be about the previous stream. */
 const STOPPED_GRACE_MS = 15_000
+/** What the server sends a direct stream's player; "terminate" asks it to close. */
+const VIDEOCORE_EVENT = "videocore"
 
 const log = logger("player-session")
 
@@ -667,6 +670,8 @@ export function usePlayerEventListener() {
                         return
                     case "error": {
                         log.error("Direct stream error", event.payload)
+                        // The server unloads a stream that failed.
+                        forgetKeptStream()
                         const message = event.payload?.error || "The stream failed"
                         setError(message)
                         // Debrid sends nothing after this, so the entry would keep "preparing".
@@ -756,13 +761,17 @@ export function usePlayerEventListener() {
                             }))
                             return
 
-                        case "stopped":
+                        case "stopped": {
                             logStreamState("torrent", payload.state)
-                            // Leaving the player stops the old stream as the next episode starts;
-                            // that late "stopped" must not wipe the new start.
-                            if (pendingInfoRef.current && Date.now() - pendingSinceRef.current < STOPPED_GRACE_MS) return
+                            // Starting the next episode stops the old stream; that late
+                            // "stopped" must not wipe the new start (or the new stream kept).
+                            const afterOwnStart = Date.now() - pendingSinceRef.current < STOPPED_GRACE_MS
+                            // Stopped elsewhere (or dropped): a stream the player left is gone.
+                            if (!afterOwnStart) forgetKeptStream("torrent")
+                            if (pendingInfoRef.current && afterOwnStart) return
                             resetTorrentStreamState()
                             return
+                        }
 
                         default:
                             return
@@ -797,6 +806,7 @@ export function usePlayerEventListener() {
 
                         case "failed":
                             logStreamState("debrid", payload.status, true, payload.message)
+                            forgetKeptStream("debrid")
                             resetTorrentStreamState()
                             return
 
@@ -844,6 +854,14 @@ export function usePlayerEventListener() {
                     handleNativePlayerEvent(parseNativePlayerEvent(message.payload))
                 }
 
+                // The server stopping a stream (e.g. its Stop button) closes the player it
+                // knows of; the stream the player left can't be picked up again after that.
+                if (message.type === VIDEOCORE_EVENT && Platform.OS === "web"
+                    && (message.payload as { type?: unknown } | null)?.type === "terminate") {
+                    log.info("The server ended the direct stream")
+                    forgetKeptStream()
+                }
+
                 // With MpvPrism on, the server streams to its mpv player instead, which the TV can't follow.
                 if (message.type === MPVCORE_EVENT && Platform.OS === "web") {
                     const event = parseNativePlayerEvent(message.payload)
@@ -885,6 +903,31 @@ export function useStartOnlineStreamPlayback() {
         },
         [router, setSource, setPlayerOpen, setLoadingMessage, setError],
     )
+}
+
+/**
+ * Opens the player on the stream it left (webOS), from where it was: the
+ * server streams it still, so nothing is downloaded again.
+ */
+export function useOpenKeptStream() {
+    const setSource = useSetAtom(currentPlaybackSourceAtom)
+    const setPlayerOpen = useSetAtom(playerOpenAtom)
+    const setLoadingMessage = useSetAtom(playerLoadingMessageAtom)
+    const setError = useSetAtom(playerErrorAtom)
+    const router = useRouter()
+
+    return React.useCallback((kept: KeptDirectStream) => {
+        log.info("Resuming the kept stream", {
+            mediaId: kept.mediaId,
+            episodeNumber: kept.episodeNumber,
+            position: Math.round(kept.position),
+        })
+        setError(null)
+        setLoadingMessage(null)
+        setSource({ ...kept.source, resumePositionSec: kept.position })
+        setPlayerOpen(true)
+        router.push("/(app)/(media)/player" as never)
+    }, [router, setError, setLoadingMessage, setPlayerOpen, setSource])
 }
 
 /**

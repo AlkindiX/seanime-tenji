@@ -4,6 +4,9 @@ import { animeEntryPlaybackIntentAtom } from "@/atoms/anime-entry.atoms"
 import { CenteredSpinner } from "@/components/shared/centered-spinner"
 import { LuffyError } from "@/components/shared/luffy-error"
 import { Button } from "@/components/ui/button"
+import { formatTime } from "@/components/features/player/helpers"
+import { endKeptStream, useKeptStream } from "@/lib/player/kept-direct-stream"
+import { Ionicons } from "@expo/vector-icons"
 import {
     debridStreamStateAtom,
     directStreamLoadingMessageAtom,
@@ -27,10 +30,14 @@ import { useTorrentStreamController } from "./use-torrent-stream-controller"
 
 type AnimeEntryTorrentStreamSectionProps = {
     entry: Anime_Entry
+    /** The TV entry screen focuses it when coming back from the player. */
+    resumeRef?: React.Ref<React.ElementRef<typeof Pressable>>
 }
 
-export function AnimeEntryTorrentStreamSection({ entry }: AnimeEntryTorrentStreamSectionProps) {
+export function AnimeEntryTorrentStreamSection({ entry, resumeRef }: AnimeEntryTorrentStreamSectionProps) {
     const torrentStream = useTorrentStreamController({ entry })
+    // webOS: the stream the player left for an episode of this show, still running.
+    const keptStream = useKeptStream(entry.mediaId)
     const [playbackIntent, setPlaybackIntent] = useAtom(animeEntryPlaybackIntentAtom)
     const progress = entry.listData?.progress ?? 0
     const sessionMode = useAtomValue(streamSessionModeAtom)
@@ -47,10 +54,26 @@ export function AnimeEntryTorrentStreamSection({ entry }: AnimeEntryTorrentStrea
     const restoreFocusRef = React.useRef(false)
     const statusVisible = (isPreparingStream || !!loadingState)
         || (!isPreparingStream && isLoadedStream)
+        || !!keptStream
     const statusVisibleRef = React.useRef(statusVisible)
 
     const stopTVStream = React.useCallback(() => {
         restoreFocusRef.current = true
+        torrentStream.stopCurrentStream()
+    }, [torrentStream.stopCurrentStream])
+
+    const resumeKeptStream = React.useCallback(() => {
+        if (!keptStream) return
+        const episode = torrentStream.episodes.find(item => item.episodeNumber === keptStream.episodeNumber)
+        // Through the episode's own press, which starts it afresh if the server dropped the stream.
+        if (episode) torrentStream.handleEpisodePress(episode)
+        else torrentStream.resumeKeptStream(keptStream.episodeNumber, () => undefined)
+    }, [keptStream, torrentStream.episodes, torrentStream.handleEpisodePress, torrentStream.resumeKeptStream])
+
+    const stopKeptStream = React.useCallback(() => {
+        restoreFocusRef.current = true
+        // Ends the server's stream (as leaving the player used to), then clears what the app shows of it.
+        endKeptStream("terminate")
         torrentStream.stopCurrentStream()
     }, [torrentStream.stopCurrentStream])
 
@@ -240,7 +263,17 @@ export function AnimeEntryTorrentStreamSection({ entry }: AnimeEntryTorrentStrea
                 )
             )}
 
-            {!isPreparingStream && isLoadedStream && (
+            {Platform.isTV && keptStream && !isPreparingStream && !loadingState ? (
+                <TVKeptStreamCard
+                    episodeNumber={keptStream.episodeNumber}
+                    position={keptStream.position}
+                    detail={activeStreamLabel}
+                    resumeRef={resumeRef}
+                    stopping={torrentStream.isStopping}
+                    onResume={resumeKeptStream}
+                    onStop={stopKeptStream}
+                />
+            ) : !isPreparingStream && isLoadedStream && (
                 Platform.isTV ? (
                     <View style={{ paddingHorizontal: TV.gutter, paddingTop: tvSize(10), paddingBottom: tvSize(15) }}>
                         <View
@@ -328,6 +361,7 @@ export function AnimeEntryTorrentStreamSection({ entry }: AnimeEntryTorrentStrea
                     usePreviousBatch={torrentStream.usePreviousBatch}
                     hasMappingError={torrentStream.episodeCollection?.hasMappingError ?? false}
                     playRef={playRef}
+                    keptEpisodeNumber={keptStream?.episodeNumber ?? null}
                 />
             ) : (
                 <View className="">
@@ -441,5 +475,64 @@ export function AnimeEntryTorrentStreamSection({ entry }: AnimeEntryTorrentStrea
                 />
             )}
         </>
+    )
+}
+
+type TVKeptStreamCardProps = {
+    episodeNumber: number
+    position: number
+    /** The torrent's progress, when the server reports it. */
+    detail: string | null
+    resumeRef?: React.Ref<React.ElementRef<typeof Pressable>>
+    stopping: boolean
+    onResume: () => void
+    onStop: () => void
+}
+
+/** webOS: the stream the player left, still running on the server, to go back to or stop. */
+function TVKeptStreamCard({ episodeNumber, position, detail, resumeRef, stopping, onResume, onStop }: TVKeptStreamCardProps) {
+    const at = position > 0 ? formatTime(position) : null
+    const resumeLabel = `Resume episode ${episodeNumber}${at ? ` at ${at}` : ""}`
+    return (
+        <View style={{ paddingHorizontal: TV.gutter, paddingTop: tvSize(10), paddingBottom: tvSize(15) }}>
+            <View
+                style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: tvSize(20),
+                    padding: tvSize(16),
+                    borderRadius: tvSize(16),
+                    backgroundColor: "rgba(22,101,52,0.15)",
+                    borderColor: "rgba(34,197,94,0.3)",
+                    borderWidth: tvSize(2),
+                    alignSelf: "flex-start",
+                }}
+            >
+                <View style={{ width: tvSize(12), height: tvSize(12), borderRadius: tvSize(6), backgroundColor: "#4ade80" }} />
+                <View style={{ gap: tvSize(4) }}>
+                    <Text className="text-white font-bold" style={{ fontSize: tvSize(20) }}>
+                        {`Episode ${episodeNumber} is still streaming`}
+                    </Text>
+                    <Text className="text-white/70" style={{ fontSize: tvSize(16) }} numberOfLines={1}>
+                        {[at ? `Left at ${at}` : null, detail].filter(Boolean).join(" · ") || "Ready to pick up where you left off"}
+                    </Text>
+                </View>
+                <TVPillButton
+                    ref={resumeRef}
+                    label="Resume"
+                    accessibilityLabel={resumeLabel}
+                    active
+                    icon={<Ionicons name="play" size={tvSize(20)} color="#b8b0ff" />}
+                    onPress={onResume}
+                />
+                <TVPillButton
+                    label={stopping ? "Stopping..." : "Stop"}
+                    accessibilityLabel={`Stop streaming episode ${episodeNumber}`}
+                    disabled={stopping}
+                    onPress={onStop}
+                    className="bg-red-600/80 border-red-500"
+                />
+            </View>
+        </View>
     )
 }

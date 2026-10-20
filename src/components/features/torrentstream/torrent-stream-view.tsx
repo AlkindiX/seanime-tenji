@@ -35,6 +35,8 @@ type TorrentStreamViewProps = {
     usePreviousBatch: boolean
     hasMappingError: boolean
     playRef?: React.Ref<React.ElementRef<typeof Pressable>>
+    /** webOS: the episode whose stream the player left running; playing it resumes. */
+    keptEpisodeNumber?: number | null
 }
 
 export function TorrentStreamView(props: TorrentStreamViewProps) {
@@ -64,6 +66,7 @@ function TVTorrentStreamView({
     usePreviousBatch,
     hasMappingError,
     playRef,
+    keptEpisodeNumber,
 }: TorrentStreamViewProps) {
     const serverStatus = useServerStatus()
     const handleAvailableEpisodePress = React.useMemo(() => {
@@ -89,6 +92,7 @@ function TVTorrentStreamView({
         const isWatched = ep.progressNumber <= progress
         const isNext = ep.episodeNumber === nextEpisode?.episodeNumber
         const isLoading = ep.episodeNumber === loadingEpisodeNumber
+        const isKept = ep.episodeNumber === keptEpisodeNumber
         const spoiler = getEpisodeSpoilerState(serverStatus, {
             episodeNumber: ep.progressNumber || ep.episodeNumber,
             watchedProgress: progress,
@@ -98,7 +102,7 @@ function TVTorrentStreamView({
                 key={ep.episodeNumber}
                 image={ep.episodeMetadata?.image || entry.media?.bannerImage}
                 duration={ep.episodeMetadata?.length}
-                badge={isLoading ? "Preparing…" : (isNext ? "Up next" : undefined)}
+                badge={isLoading ? "Preparing…" : isKept ? "Resume" : (isNext ? "Up next" : undefined)}
                 title={spoiler.hideTitle ? `Episode ${ep.episodeNumber}` : ep.episodeTitle || `Episode ${ep.episodeNumber}`}
                 subtitle={spoiler.hideTitle ? undefined : ep.displayTitle}
                 completed={isWatched}
@@ -111,6 +115,7 @@ function TVTorrentStreamView({
     }, [
         handleAvailableEpisodePress,
         isEpisodeSelectionLocked,
+        keptEpisodeNumber,
         loadingEpisodeNumber,
         nextEpisode?.episodeNumber,
         progress,

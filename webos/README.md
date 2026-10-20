@@ -119,6 +119,28 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   subtitle search) and speed. It comes back paused with the controls up, also when the
   episode was still loading as the app was hidden; resuming on its own is deliberately
   not done.
+- **Leaving the player.** Back leaves at once, without asking: playback pauses, the player
+  fades out (160 ms, opacity and scale with the Web Animations API) and the page underneath
+  eases in. Back still closes an open panel or dialog first, then the controls. Stop and the
+  controls' exit button leave the same way. The position goes to the server's watch history
+  before the player closes.
+- **Torrent and debrid streams keep running** after you leave the player, in case Back was
+  pressed by accident. The server goes on downloading the episode's file (it marks the whole
+  file for download) and Tenji keeps the subtitle lines it sends meanwhile. Playing that
+  episode again (its card, *Play*, or *Resume* on the card the Torrents tab shows, which has
+  focus when you come back from the player) reopens the player at once where you left it,
+  without asking the server for a new stream, so nothing is downloaded again. First a HEAD
+  request checks that the server still serves that stream; if it doesn't (it restarted,
+  another device started a stream, the torrent was stopped elsewhere), the episode starts
+  afresh as usual.
+  - The kept stream ends when another episode or video starts (torrent, debrid, library file
+    or online stream), with *Stop* on that card, when the episode played to the end or the
+    player failed, after 30 minutes nobody watched it, and when the app closes (sent as the
+    page unloads, so not guaranteed). Stopping the stream on the server ends it too.
+  - Picking it up again tells the server the player is back (`video-loaded`) and reports a
+    seek to where it starts: the server sends each subtitle line only once and ignores a
+    second `video-loaded-metadata` after a seek, so the seek makes it read the subtitles again
+    from there.
 - **Resuming** ("continue watching") hands the start position to the TV's media pipeline
   with LG's `mediaOption` parameter, so it doesn't buffer from the start of the file first.
   If the TV rejects it, or the file hasn't loaded after 8 seconds, Tenji loads the file the
@@ -248,7 +270,7 @@ The arrow keys, OK and Back work as on Android TV. LG remotes also have these ke
 | Yellow | Skip the intro or outro when the button is offered, otherwise show the controls | |
 | Blue | Settings | |
 | Info | Show or hide playback stats | |
-| Stop | Ask to leave the player | |
+| Stop | Leave the player, as Back does (a stream keeps running; see Playback) | |
 | CH+ / CH- | Next / previous episode (asks first when much of the episode is left) | Page up / down through a list or grid |
 | 0 to 9 | Jump to 0 %, 10 % … 90 % of the episode | Type into a text field |
 | Play, Pause, ⏩, ⏪ | Play, pause, seek | |
@@ -307,6 +329,11 @@ are released, so a long seek doesn't continue when you come back.
   fall back to plain text. JASSUB's worker needs Chromium 80 for `type: "module"`; the
   build makes it a classic script, so webOS 6 may run it too.
 - PGS placement was checked with a test image, not a real Blu-ray track.
+- Leaving the player and resuming a kept stream: checked by typecheck, unit tests of the
+  bookkeeping and the Seanime 3.10.4 server source, not yet against a server or on a TV.
+  Still to see on a TV: whether the exit fade also fades the video (webOS may draw video on
+  its own plane, in which case the paused frame stays until the player closes), how long
+  resuming takes, and whether the stream ends when the app is closed.
 - The relay service on a TV (see Live connection). The relay was tested against a local `ws`
   server, the app's side through a stand-in `PalmServiceBridge`, and the built bundle with a
   stand-in `webos-service`, all in Node 22. Still to check on a TV: that Developer Mode and

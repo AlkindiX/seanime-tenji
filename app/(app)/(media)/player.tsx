@@ -38,6 +38,7 @@ import { getBufferedRatio } from "@/components/features/player/progress"
 import type { PlayerPanel } from "@/components/features/player/types"
 import { createGestureRefs, syncGestureRef } from "@/components/features/player/types"
 import { TVPlayerControls, TVPlayerDialog, TVPlayerPanel } from "@/components/tv"
+import { playPlayerExit } from "@/components/tv/tv-player-exit"
 import { isLocalServer } from "@/lib/downloads"
 import { useIsServerConnected } from "@/lib/offline"
 import {
@@ -50,6 +51,7 @@ import {
 } from "@/lib/player"
 import type { PlayerChapter } from "@/lib/player"
 import { getLocalEpisodePlaybackSource } from "@/lib/player"
+import { endKeptStream } from "@/lib/player/kept-direct-stream"
 import { usePlayerPreferences } from "@/lib/player/player-preferences"
 import { getWatchHistoryResumePosition } from "@/lib/player/resume-position"
 import type { MobilePlaybackSource } from "@/lib/player/types"
@@ -202,7 +204,7 @@ function PlayerScreenInner() {
         }
     }, [windowWidth, windowHeight, state.isPiPActive])
 
-    useContinuitySync(player.source, state)
+    const { flushContinuity } = useContinuitySync(player.source, state)
 
     React.useEffect(() => {
         if (!prefs.showStats || state.isPiPActive) {
@@ -754,8 +756,10 @@ function PlayerScreenInner() {
     }, [setReturnFocus, source])
 
     const stopTVTorrent = React.useCallback(() => {
-        // A direct stream (webOS) is stopped by the player's "video-terminated";
-        // dropping here would also drop a preloaded next episode.
+        // A direct stream (webOS) keeps running when the player closes, so the
+        // episode can be picked up again (kept-direct-stream.ts); it ends with
+        // the player's "video-terminated". Dropping here would also drop a
+        // preloaded next episode.
         if (!Platform.isTV || !isTorrentSource(source) || source?.directStreamPlaybackId) return
 
         void (async () => {
@@ -773,10 +777,35 @@ function PlayerScreenInner() {
 
     const handleBack = React.useCallback(() => {
         saveReturnFocus()
+        if (Platform.OS === "web") {
+            // Saved before stop() resets the player's time, which the save on unmount reads.
+            flushContinuity()
+            // A stream that failed has nothing to come back to.
+            const failed = !!error || state.status === "error"
+            if (failed && source?.directStreamPlaybackId) endKeptStream("terminate", source.directStreamPlaybackId)
+        }
         player.stop()
         stopTVTorrent()
         if (canGoBack()) back()
-    }, [back, canGoBack, player, saveReturnFocus, stopTVTorrent])
+    }, [back, canGoBack, error, flushContinuity, player, saveReturnFocus, source?.directStreamPlaybackId, state.status, stopTVTorrent])
+
+    // webOS: Back leaves at once, without asking. A torrent or debrid stream
+    // keeps running on the server, so playing the episode again resumes it.
+    const exitViewRef = React.useRef<React.ComponentRef<typeof View>>(null)
+    const leavingRef = React.useRef(false)
+    const leavePlayer = React.useCallback(() => {
+        if (leavingRef.current) return
+        // Nowhere to go back to: fading out would leave a blank screen.
+        if (!canGoBack()) {
+            handleBack()
+            return
+        }
+        leavingRef.current = true
+        controls.clearHideTimer()
+        // Silent at once; the page then fades out before Back.
+        player.pause()
+        void playPlayerExit(exitViewRef.current).then(handleBack)
+    }, [canGoBack, controls.clearHideTimer, handleBack, player.pause])
 
     // The error and loading screens replace the player and its dialogs.
     const showsBareScreen = !!error || (!!loadingMessage && !source)
@@ -883,6 +912,8 @@ function PlayerScreenInner() {
         if (!Platform.isTV) return
 
         const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+            // Already on its way out.
+            if (leavingRef.current) return true
             if (showsBareScreen) {
                 handleBack()
                 return true
@@ -909,7 +940,8 @@ function PlayerScreenInner() {
                 controls.setControlsVisible(false)
                 return true
             }
-            setShowExitPrompt(true)
+            if (Platform.OS === "web") leavePlayer()
+            else setShowExitPrompt(true)
             return true
         })
 
@@ -920,6 +952,7 @@ function PlayerScreenInner() {
         controls.controlsVisible,
         controls.setControlsVisible,
         handleBack,
+        leavePlayer,
         nextEpisodePrompt,
         panel,
         showExitPrompt,
@@ -928,6 +961,8 @@ function PlayerScreenInner() {
 
     const closePlayerToEntry = React.useCallback((view: MobilePlaybackSource["entryView"], mediaId: number) => {
         saveReturnFocus(view, mediaId)
+        // Saved before stop() resets the player's time (see handleBack).
+        if (Platform.OS === "web") flushContinuity()
         player.stop()
         if (canGoBack()) {
             back()
@@ -938,7 +973,7 @@ function PlayerScreenInner() {
             pathname: "/(app)/entry/anime/[id]",
             params: { id: String(mediaId), initialView: view },
         })
-    }, [back, canGoBack, player, replace, saveReturnFocus])
+    }, [back, canGoBack, flushContinuity, player, replace, saveReturnFocus])
 
     // next episode logic
     const canPlayNext = React.useMemo(() => {
@@ -1176,7 +1211,9 @@ function PlayerScreenInner() {
             case "stop":
                 setPanel(null)
                 controls.clearHideTimer()
-                setShowExitPrompt(true)
+                // webOS leaves like Back (the stream keeps running); elsewhere it asks first.
+                if (Platform.OS === "web") leavePlayer()
+                else setShowExitPrompt(true)
                 return true
         }
 
@@ -1349,9 +1386,13 @@ function PlayerScreenInner() {
 
     return (
         <GestureHandlerRootView style={{ flex: 1 }}>
+            {/* Styled without className: the exit fade needs this view's DOM node. */}
             <View
-                className="bg-black flex-1 w-full h-full"
+                ref={exitViewRef}
                 style={{
+                    flex: 1,
+                    width: "100%",
+                    height: "100%",
                     backgroundColor: "black",
                 }}
             >
@@ -1450,7 +1491,8 @@ function PlayerScreenInner() {
                             }}
                             onExit={() => {
                                 controls.clearHideTimer()
-                                setShowExitPrompt(true)
+                                if (Platform.OS === "web") leavePlayer()
+                                else setShowExitPrompt(true)
                             }}
                             onShowControls={controls.showControls}
                             onControlFocus={controls.scheduleHide}
@@ -1691,7 +1733,8 @@ function PlayerScreenInner() {
                     )
                 )}
 
-                {Platform.isTV && (
+                {/* webOS leaves without asking (see leavePlayer). */}
+                {Platform.isTV && Platform.OS !== "web" && (
                     <TVPlayerDialog
                         open={showExitPrompt}
                         eyebrow="Stop playback"
