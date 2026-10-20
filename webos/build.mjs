@@ -7,7 +7,8 @@
  *
  * Steps: check the appinfo.json images, export the TV interface for web with
  * Expo, make every URL relative (webOS loads the app from file://), lower JS
- * and CSS for older TV browsers, add polyfills, then write the IPK.
+ * and CSS for older TV browsers, add polyfills and libass (JASSUB, for ASS
+ * subtitles), then write the IPK.
  *
  * Flags: --skip-export  reuse dist/webos/www from a previous run
  */
@@ -17,6 +18,7 @@ import { createRequire } from "node:module"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import zlib from "node:zlib"
+import { buildJassub } from "./jassub.mjs"
 
 const require = createRequire(import.meta.url)
 const esbuild = require("esbuild")
@@ -56,9 +58,11 @@ function exportWeb() {
         cwd: root,
         stdio: "inherit",
         env: { ...process.env, EXPO_TV: "1", SEANIME_WEBOS: "1", NODE_ENV: "production" },
+        // npx is npx.cmd on Windows, which Node only starts through a shell
+        shell: process.platform === "win32",
     })
     if (result.status !== 0) {
-        throw new Error("expo export failed")
+        throw new Error(`expo export failed${result.error ? `: ${result.error.message}` : ""}`)
     }
 }
 
@@ -425,6 +429,8 @@ async function main() {
         else if (file.endsWith(".css")) lowerCss(file)
     }
     await buildPolyfills(path.join(appDir, "polyfills.js"))
+    log("Bundling libass (JASSUB) for ASS subtitles…")
+    await buildJassub(path.join(appDir, "jassub"))
 
     fs.writeFileSync(path.join(appDir, "appinfo.json"), JSON.stringify(appinfo, null, 4) + "\n")
     for (const [field] of images) {

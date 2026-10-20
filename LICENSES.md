@@ -29,6 +29,12 @@ Certain native modules in this repository were inspired by or adapted from outst
   and [Findroid](https://github.com/findroid/findroid), licensed under MPL-2.0.
 * **License:** [Mozilla Public License 2.0 (MPL-2.0)](modules/expo-mpv-player/LICENSE)
 
+### 3. JASSUB (webOS build only)
+
+* **Description:** libass compiled to WebAssembly, used by the LG webOS build to draw ASS subtitles. It is an npm dependency, bundled unmodified into the webOS package by `webos/jassub.mjs`.
+* **Source:** [JASSUB](https://github.com/ThaUnknown/jassub), which includes [libass](https://github.com/libass/libass) and its dependencies (FreeType, HarfBuzz, FriBidi and others).
+* **License:** LGPL-2.1-or-later AND (FTL OR GPL-2.0-or-later) AND MIT AND MIT-Modern-Variant AND ISC AND NTP AND Zlib AND BSL-1.0 (see the package's LICENSE).
+
 ---
 
 ## Gratitude

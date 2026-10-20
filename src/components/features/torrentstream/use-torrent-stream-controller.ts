@@ -29,6 +29,7 @@ import {
     torrentStreamLoadingStateAtom,
     torrentStreamPendingInfoAtom,
 } from "@/lib/player"
+import { STREAM_PLAYBACK_TYPE } from "@/lib/player/server-playback"
 import { logger } from "@/lib/utils/logger"
 import { useAtom } from "jotai"
 import { useAtomValue } from "jotai/react"
@@ -454,7 +455,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
                     aniDBEpisode: episode.aniDBEpisode,
                     autoSelect: true,
                     fileId: "",
-                    playbackType: "externalPlayerLink",
+                    playbackType: STREAM_PLAYBACK_TYPE,
                     clientId: getClientIdentity().clientId,
                 },
                 {
@@ -484,7 +485,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
                 episodeNumber: episode.episodeNumber,
                 aniDBEpisode: episode.aniDBEpisode,
                 autoSelect: true,
-                playbackType: "externalPlayerLink",
+                playbackType: STREAM_PLAYBACK_TYPE,
                 clientId: getClientIdentity().clientId,
             },
             {
@@ -565,7 +566,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
                     fileId: params.fileId ?? "",
                     fileIndex: params.fileIndex,
                     batchEpisodeFiles: params.batchEpisodeFiles,
-                    playbackType: "externalPlayerLink",
+                    playbackType: STREAM_PLAYBACK_TYPE,
                     clientId: getClientIdentity().clientId,
                 },
                 {
@@ -601,7 +602,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
                 torrent: params.torrent,
                 fileIndex: params.fileIndex,
                 batchEpisodeFiles: params.batchEpisodeFiles,
-                playbackType: "externalPlayerLink",
+                playbackType: STREAM_PLAYBACK_TYPE,
                 clientId: getClientIdentity().clientId,
             },
             {

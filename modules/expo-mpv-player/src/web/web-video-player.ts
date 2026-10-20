@@ -17,8 +17,10 @@ import type {
     SubtitleTrack,
     TechnicalInfo,
 } from "../MpvPlayer.types"
+import { getSubtitleFeed, type SubtitleFeed } from "../subtitle-feed"
+import { LibassRenderer, type AssChunk } from "./libass"
 import { levelsAboveHeight, loadFailure, mediaOptionType, shouldReload, type SourceProbe } from "./media-pipeline"
-import { activeCues, parseSubtitles, stripMarkup, type SubtitleCue } from "./subtitles"
+import { activeCues, isAssScript, parseSubtitles, stripMarkup, type SubtitleCue } from "./subtitles"
 
 export type WebVideoPlayerCallbacks = {
     onLoad: (payload: { url: string }) => void
@@ -38,6 +40,10 @@ type SubtitleEntry = {
     /** Sidecar file fetched and parsed by us. */
     url?: string
     cues?: SubtitleCue[]
+    /** ASS track of a stream: its header and the packets so far (libass draws these). */
+    ass?: { header: string; chunks: AssChunk[] }
+    /** A sidecar file that is an ASS script (libass draws it). */
+    assScript?: string
     loading?: Promise<void>
     /** Added with addSubtitleFile, so a reload of the same source keeps it. */
     added?: boolean
@@ -138,6 +144,19 @@ export class WebVideoPlayer {
     private hls: Hls | null = null
     private source: MpvVideoSource | null = null
     private subtitles: SubtitleEntry[] = []
+    /** The source's subtitle feed: tracks whose cues arrive during playback. */
+    private feed: SubtitleFeed | undefined
+    private feedUnsubscribe: (() => void) | null = null
+    /** Draw ASS tracks with libass rather than as text lines. */
+    private assRendering = true
+    private libass: LibassRenderer | null = null
+    private libassStarting: Promise<void> | null = null
+    /** The entry libass has loaded, and how many of its packets it was given. */
+    private libassEntry: SubtitleEntry | null = null
+    private libassChunkCount = 0
+    private libassQueue: Promise<void> = Promise.resolve()
+    /** libass failed to start or run on this TV; text lines are used from then on. */
+    private static libassBroken = false
     private selectedSubtitle = 0
     private subtitleDelay = 0
     private subtitlesVisible = true
@@ -160,6 +179,8 @@ export class WebVideoPlayer {
     constructor(
         private readonly video: HTMLVideoElement,
         private readonly callbacks: WebVideoPlayerCallbacks,
+        /** Element over the video, sized like it, that holds libass's canvas. */
+        private readonly subtitleHost?: HTMLElement,
     ) {
         const on = (type: string, listener: EventListener) => {
             video.addEventListener(type, listener)
@@ -191,6 +212,7 @@ export class WebVideoPlayer {
         on("seeked", () => {
             if (video.readyState >= 3 || video.paused) this.state({ isLoading: false })
             this.updateCues()
+            this.notifyFeed("seeked")
         })
         on("ended", () => this.state({ eofReached: true, isPaused: true, isPlaying: false }))
         on("ratechange", () => this.state({ speed: video.playbackRate }))
@@ -232,6 +254,18 @@ export class WebVideoPlayer {
             title: sub.title ?? fileTitle(sub.url),
             lang: sub.lang,
         }))
+        this.assRendering = source.assRendering !== false
+        this.feed = getSubtitleFeed(source.subtitleFeed)
+        if (this.feed) {
+            // The feed fills these arrays in place; the cues are shown as they come in.
+            for (const track of this.feed.tracks) {
+                this.subtitles.push({ title: track.title, lang: track.lang, codec: track.codec, cues: track.cues, ass: track.ass })
+            }
+            this.feedUnsubscribe = this.feed.subscribe(() => {
+                this.syncLibass()
+                this.updateCues(true)
+            })
+        }
 
         const { video } = this
         video.autoplay = false
@@ -317,6 +351,11 @@ export class WebVideoPlayer {
 
     private reset() {
         this.stopCueTimer()
+        this.feedUnsubscribe?.()
+        this.feedUnsubscribe = null
+        this.feed = undefined
+        // A new source may carry other fonts.
+        this.destroyLibass()
         this.hls?.destroy()
         this.hls = null
         this.source = null
@@ -339,6 +378,7 @@ export class WebVideoPlayer {
     private onLoadedMetadata() {
         const source = this.source
         if (!source) return
+        this.notifyFeed("loadedmetadata")
 
         const usedMediaOption = !!this.mediaOptionSource
         this.clearMediaOptionTimer()
@@ -452,7 +492,7 @@ export class WebVideoPlayer {
         const added = this.subtitles.filter(entry => entry.added)
         this.load({ ...source, startPosition: suspended.position, autoplay: false })
         // Files added with addSubtitleFile come after the source's own, as before.
-        for (const entry of added) this.subtitles.push({ url: entry.url, title: entry.title, cues: entry.cues, added: true })
+        for (const entry of added) this.subtitles.push({ url: entry.url, title: entry.title, cues: entry.cues, assScript: entry.assScript, added: true })
         this.restoreTracks = { subtitle: suspended.subtitle, audio: suspended.audio }
     }
 
@@ -631,6 +671,7 @@ export class WebVideoPlayer {
 
         const entry = this.subtitles[this.selectedSubtitle - 1]
         if (entry?.url && !entry.cues) void this.loadSidecar(entry)
+        this.syncLibass()
         this.updateCues(true)
     }
 
@@ -654,6 +695,8 @@ export class WebVideoPlayer {
             })
             .then(text => {
                 entry.cues = parseSubtitles(text)
+                if (isAssScript(text)) entry.assScript = text
+                this.syncLibass()
                 this.updateCues(true)
             })
             .catch(error => {
@@ -666,17 +709,124 @@ export class WebVideoPlayer {
     setSubtitleDelay(delay: number) {
         this.subtitleDelay = delay
         this.state({ subtitleDelay: delay })
+        this.libass?.setDelay(delay)
         this.updateCues(true)
     }
 
     setSubtitleVisibility(visible: boolean) {
         this.subtitlesVisible = visible
+        this.syncLibass()
         this.updateCues(true)
+    }
+
+    setAssRendering(enabled: boolean) {
+        this.assRendering = enabled
+        // Turning it on again is also how to retry after a failure.
+        if (enabled) WebVideoPlayer.libassBroken = false
+        this.syncLibass()
+        this.updateCues(true)
+    }
+
+    ///////////////////////////////////////////////////////////////////////////
+    // libass
+    ///////////////////////////////////////////////////////////////////////////
+
+    /** Whether libass is drawing `entry`, so its text lines stay hidden. */
+    private libassDraws(entry: SubtitleEntry) {
+        return this.libass !== null && this.libassEntry === entry
+    }
+
+    /** Gives libass the selected track (and its new packets), or clears it. */
+    private syncLibass() {
+        const entry = this.subtitles[this.selectedSubtitle - 1]
+        const wanted = !!entry && (!!entry.ass || !!entry.assScript)
+            && this.subtitlesVisible && this.assRendering && !WebVideoPlayer.libassBroken && !!this.subtitleHost && !!this.source
+        const libass = this.libass
+
+        if (!wanted) {
+            if (libass && this.libassEntry) {
+                this.libassEntry = null
+                this.runLibass(renderer => renderer.setTrack(null))
+            }
+            libass?.setVisible(false)
+            return
+        }
+        if (!libass) {
+            this.startLibass()
+            return
+        }
+
+        libass.setVisible(true)
+        if (this.libassEntry !== entry) {
+            this.libassEntry = entry
+            this.libassChunkCount = 0
+            const script = entry.ass?.header ?? entry.assScript ?? null
+            this.runLibass(renderer => renderer.setTrack(script))
+        }
+        const chunks = entry.ass?.chunks
+        if (chunks && chunks.length > this.libassChunkCount) {
+            const pending = chunks.slice(this.libassChunkCount)
+            this.libassChunkCount = chunks.length
+            this.runLibass(renderer => renderer.addChunks(pending))
+        }
+    }
+
+    private startLibass() {
+        if (this.libassStarting || !this.subtitleHost) return
+        const loadId = this.loadId
+        this.libassStarting = LibassRenderer.create(this.video, this.subtitleHost, this.source?.subtitleFonts ?? []).then((renderer) => {
+            if (loadId !== this.loadId || !this.source) {
+                renderer.destroy()
+                return
+            }
+            this.libassStarting = null
+            renderer.setDelay(this.subtitleDelay)
+            this.libass = renderer
+            this.libassEntry = null
+            this.syncLibass()
+            this.updateCues(true)
+        }, (error: unknown) => {
+            if (loadId !== this.loadId) return
+            this.libassStarting = null
+            this.libassFailed(error)
+        })
+    }
+
+    /** Runs libass calls one after another; a failure falls back to text lines. */
+    private runLibass(action: (renderer: LibassRenderer) => Promise<void>) {
+        const renderer = this.libass
+        if (!renderer) return
+        this.libassQueue = this.libassQueue
+            .then(() => this.libass === renderer ? action(renderer) : undefined)
+            .catch((error: unknown) => {
+                if (this.libass === renderer) this.libassFailed(error)
+            })
+    }
+
+    private libassFailed(error: unknown) {
+        console.warn("[web-video-player] libass is unavailable; showing subtitles as text", error)
+        WebVideoPlayer.libassBroken = true
+        this.destroyLibass()
+        this.updateCues(true)
+    }
+
+    private destroyLibass() {
+        this.libass?.destroy()
+        this.libass = null
+        this.libassStarting = null
+        this.libassEntry = null
+        this.libassChunkCount = 0
+        this.libassQueue = Promise.resolve()
+    }
+
+    private notifyFeed(type: "loadedmetadata" | "seeked") {
+        const { video } = this
+        this.feed?.onPlayerEvent?.({ type, position: video.currentTime, duration: video.duration, paused: video.paused })
     }
 
     private currentCues(): SubtitleCue[] {
         const entry = this.subtitles[this.selectedSubtitle - 1]
-        if (!entry || !this.subtitlesVisible) return []
+        if (!entry || !this.subtitlesVisible || this.libassDraws(entry)) return []
 
         const time = this.video.currentTime - this.subtitleDelay
         if (entry.cues) return activeCues(entry.cues, time)

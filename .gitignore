@@ -6,6 +6,8 @@ node_modules/
 
 # Expo
 .expo/
+# libass for the webOS dev server (npm run dev:webos)
+public/jassub/
 .seanime/
 dist/
 web-build/

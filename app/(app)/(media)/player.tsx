@@ -57,7 +57,7 @@ import { useContinuitySync } from "@/lib/player/use-continuity-sync"
 import { useMpvPlayer } from "@/lib/player/use-mpv-player"
 import { cn } from "@/lib/utils"
 import { toast } from "@/lib/utils/toast"
-import { usePointerActivity } from "@/lib/webos/use-webos-runtime"
+import { usePointerActivity, usePointerClick } from "@/lib/webos/use-webos-runtime"
 import { useKeepAwake } from "expo-keep-awake"
 import { MpvPlayerView, type TechnicalInfo } from "expo-mpv-player"
 import { NavigationBar } from "expo-navigation-bar"
@@ -95,6 +95,8 @@ const DEFAULT_TEXT_SUBTITLE_MARGIN_Y = 34
 const SEEK_SNAP_MAX_THRESHOLD = 4
 const SEEK_SNAP_DURATION_RATIO = 0.02
 const SEEK_SNAP_VERTICAL_DECAY = 15
+/** One wheel press may arrive as a click and as OK; the second within this is the same press. */
+const WHEEL_TOGGLE_DEBOUNCE_MS = 400
 
 
 function isAssSubtitleCodec(codec?: string) {
@@ -374,6 +376,18 @@ function PlayerScreenInner() {
     usePointerActivity(() => {
         if (!state.isPiPActive) controls.showControls()
     })
+
+    // Pressing the Magic Remote's wheel (its OK button) pauses and plays, from
+    // the pointer (a click on the video) or from 5-way mode (OK with the
+    // controls hidden). If one press arrives both ways, only the first counts.
+    const lastWheelToggleRef = React.useRef(0)
+    const toggleFromWheel = React.useCallback(() => {
+        const now = Date.now()
+        if (now - lastWheelToggleRef.current < WHEEL_TOGGLE_DEBOUNCE_MS) return
+        lastWheelToggleRef.current = now
+        player.togglePlayPause()
+        controls.showControls()
+    }, [controls.showControls, player.togglePlayPause])
 
     // settings panel
     const [panel, setPanel] = React.useState<PlayerPanel | null>(null)
@@ -765,6 +779,13 @@ function PlayerScreenInner() {
     // The error and loading screens replace the player and its dialogs.
     const showsBareScreen = !!error || (!!loadingMessage && !source)
 
+    // A Magic Remote click on the video (not on a control) plays and pauses.
+    usePointerClick(() => {
+        if (!Platform.isTV || showsBareScreen || panel || nextEpisodePrompt || showExitPrompt) return
+        if (autoNext.autoNextCountdown !== null || state.isPiPActive) return
+        toggleFromWheel()
+    })
+
     useTVEventHandler((event) => {
         if (!Platform.isTV || !event) return
         if (event.eventType === "menu") return
@@ -828,6 +849,11 @@ function PlayerScreenInner() {
             if (event.eventType === "right") {
                 player.seekRelative(prefs.buttonSeekSec)
                 controls.showControls()
+                return
+            }
+            // LG's OK is the Magic Remote wheel; pressing it plays and pauses.
+            if (Platform.OS === "web" && (event.eventType === "select" || event.eventType === "enter")) {
+                toggleFromWheel()
                 return
             }
             if (
@@ -1612,6 +1638,10 @@ function PlayerScreenInner() {
                             onSetSubFontSize={handleSubFontSize}
                             onSetAudioTrack={player.setAudioTrack}
                             onSetSubtitleTrack={player.setSubtitleTrack}
+                            onToggleAssRendering={Platform.OS === "web" ? () => {
+                                updatePrefs({ assRendering: !prefs.assRendering })
+                                player.setAssRendering(!prefs.assRendering)
+                            } : undefined}
                             onToggleAutoNext={() => updatePrefs({ autoNextEpisode: !prefs.autoNextEpisode })}
                             onToggleAutoSkipOpEd={() => updatePrefs({ autoSkipOpEd: !prefs.autoSkipOpEd })}
                             episodes={source?.episodes}

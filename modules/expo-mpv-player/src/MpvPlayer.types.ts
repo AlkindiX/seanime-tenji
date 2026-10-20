@@ -46,6 +46,12 @@ export type MpvVideoSource = {
     chapters?: MpvChapter[]
     /** How the source was chosen, shown with the technical info. */
     mediaInfoSummary?: MpvMediaInfoSummary
+    /** Id of a registered subtitle feed (see `registerSubtitleFeed`) whose tracks fill in during playback. */
+    subtitleFeed?: string
+    /** Fonts the file carries (MKV attachments), as URLs, for drawing ASS subtitles with libass. */
+    subtitleFonts?: string[]
+    /** Draw ASS subtitles with libass (default) or as plain text lines; `setAssRendering` changes it later. */
+    assRendering?: boolean
 }
 
 export type MpvMediaInfoSummary = {
@@ -187,6 +193,11 @@ export type MpvPlayerViewRef = {
     setSubtitleMarginY: (margin: number) => Promise<void>
     setSubtitleAlignX: (alignment: SubtitleHorizontalAlignment) => Promise<void>
     setSubtitleAlignY: (alignment: SubtitleVerticalAlignment) => Promise<void>
+    /**
+     * Web player only: draw ASS subtitles with libass (styling, signs,
+     * positioning) or as plain text lines. mpv always uses libass.
+     */
+    setAssRendering?: (enabled: boolean) => Promise<void>
 
     // audio controls
     getAudioTracks: () => Promise<AudioTrack[]>

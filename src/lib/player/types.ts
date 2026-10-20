@@ -87,10 +87,11 @@ export type MobilePlaybackSource = {
     /** Server base selected by the loopback/configured-address resolver. */
     serverLocalServerUrl?: string
 
-    /**
-     * unused
-     */
+    /** Set for streams played through the server's player pipeline (webOS torrent and debrid). */
     serverStreamType?: NativePlayer_StreamType
+
+    /** The server's playback id in that pipeline; also the id of the subtitle feed it fills. */
+    serverPlaybackId?: string
 
     /** MKV metadata parsed by the backend (chapters, fonts, subtitle tracks). */
     mkvMetadata?: MKVParser_Metadata
@@ -135,6 +136,10 @@ export type WebPlaybackPlan = {
     maxVideoHeight?: number
     chapters?: MpvChapter[]
     mediaInfoSummary?: MpvMediaInfoSummary
+    /** Id of the subtitle feed the server fills during playback. */
+    subtitleFeed?: string
+    /** Fonts the file carries, for drawing its ASS subtitles with libass. */
+    subtitleFonts?: string[]
     /**
      * Called when the player reports an error. `true`: handled, a new plan
      * is on its way. A string: the message to show instead. `null`: nothing

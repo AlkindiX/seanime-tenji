@@ -53,6 +53,8 @@ type Props = {
     onSetSubFontSize: (size: number) => void
     onSetAudioTrack: (id: number) => void
     onSetSubtitleTrack: (id: number) => void
+    /** webOS only: libass or plain-text subtitles. */
+    onToggleAssRendering?: () => void
     onToggleAutoNext: () => void
     onToggleAutoSkipOpEd: () => void
 }
@@ -300,6 +302,13 @@ function TracksHome(props: Props & { preferred: boolean }) {
             icon: <Type size={ICON} color="#ffffff" />,
             press: () => props.onNavigate("subtitle-size"),
         },
+        // mpv always draws ASS with libass; the webOS player can fall back to plain text.
+        ...(props.onToggleAssRendering ? [{
+            label: "Subtitle styling",
+            detail: props.prefs.assRendering ? "Full (fonts, signs, positioning)" : "Plain text",
+            icon: <Type size={ICON} color="#ffffff" />,
+            press: props.onToggleAssRendering,
+        }] : []),
     ]
 
     return <ButtonList rows={rows} preferred={props.preferred} />

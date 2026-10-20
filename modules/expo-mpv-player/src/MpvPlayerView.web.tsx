@@ -6,7 +6,7 @@ import type {
     SubtitleHorizontalAlignment,
     SubtitleVerticalAlignment,
 } from "./MpvPlayer.types"
-import type { SubtitleCue } from "./web/subtitles"
+import type { SubtitleCue, SubtitleImage } from "./web/subtitles"
 import { WebVideoPlayer } from "./web/web-video-player"
 
 type SubtitleStyle = {
@@ -36,7 +36,62 @@ const OUTLINE = [
     "0 0 6px rgba(0,0,0,0.8)",
 ].join(", ")
 
+type Size = { width: number; height: number }
+
+/** Where a `contain`-fitted video's picture sits in the view. */
+function pictureRect(view: Size, video: Size) {
+    if (!view.width || !view.height || !video.width || !video.height) return null
+    const scale = Math.min(view.width / video.width, view.height / video.height)
+    const width = video.width * scale
+    const height = video.height * scale
+    return { left: (view.width - width) / 2, top: (view.height - height) / 2, width, height }
+}
+
+/** How much `cover` (zoomed to fill) enlarges the picture compared with `contain`. */
+function coverFactor(view: Size, video: Size) {
+    if (!view.width || !view.height || !video.width || !video.height) return 1
+    const x = view.width / video.width
+    const y = view.height / video.height
+    return Math.max(x, y) / Math.min(x, y)
+}
+
+const percent = (value: number, of: number) => `${(value / of) * 100}%`
+
+/** Image subtitles (PGS), placed on the video's own pixel grid inside the picture. */
+function ImageSubtitle({ image, video }: { image: SubtitleImage; video: Size }) {
+    const canvasWidth = image.canvasWidth || video.width || 1920
+    const canvasHeight = image.canvasHeight || video.height || 1080
+    const crop = image.crop
+    const width = crop?.width ?? image.width
+    const height = crop?.height ?? image.height
+    return (
+        <div
+            style={{
+                position: "absolute",
+                left: percent(image.x, canvasWidth),
+                top: percent(image.y, canvasHeight),
+                width: percent(width, canvasWidth),
+                height: percent(height, canvasHeight),
+                overflow: "hidden",
+            }}
+        >
+            <img
+                src={image.src}
+                alt=""
+                style={{
+                    position: "absolute",
+                    left: crop ? percent(-crop.x, width) : 0,
+                    top: crop ? percent(-crop.y, height) : 0,
+                    width: percent(image.width, width),
+                    height: percent(image.height, height),
+                }}
+            />
+        </div>
+    )
+}
+
 function SubtitleOverlay({ cues, style, height }: { cues: SubtitleCue[]; style: SubtitleStyle; height: number }) {
+    cues = cues.filter(cue => !cue.image)
     if (cues.length === 0 || height <= 0) return null
 
     const unit = height / 720
@@ -108,7 +163,10 @@ export const MpvPlayerView = React.forwardRef<MpvPlayerViewRef, MpvPlayerViewPro
     const playerRef = React.useRef<WebVideoPlayer | null>(null)
     const [cues, setCues] = React.useState<SubtitleCue[]>([])
     const [subtitleStyle, setSubtitleStyle] = React.useState(DEFAULT_SUBTITLE_STYLE)
-    const [height, setHeight] = React.useState(0)
+    const [viewSize, setViewSize] = React.useState<Size>({ width: 0, height: 0 })
+    const height = viewSize.height
+    const [videoSize, setVideoSize] = React.useState<Size>({ width: 0, height: 0 })
+    const subtitleHostRef = React.useRef<HTMLDivElement | null>(null)
     const [zoom, setZoom] = React.useState({ scale: 1, fill: false })
     const zoomRef = React.useRef(zoom)
     zoomRef.current = zoom
@@ -127,10 +185,16 @@ export const MpvPlayerView = React.forwardRef<MpvPlayerViewRef, MpvPlayerViewPro
             onError: nativeEvent => handlers.current.onError?.({ nativeEvent }),
             onTracksReady: () => handlers.current.onTracksReady?.({ nativeEvent: {} }),
             onSubtitleCues: setCues,
-        })
+        }, subtitleHostRef.current ?? undefined)
         playerRef.current = player
 
+        const updateVideoSize = () => setVideoSize({ width: video.videoWidth, height: video.videoHeight })
+        video.addEventListener("loadedmetadata", updateVideoSize)
+        video.addEventListener("resize", updateVideoSize)
+
         return () => {
+            video.removeEventListener("loadedmetadata", updateVideoSize)
+            video.removeEventListener("resize", updateVideoSize)
             player.destroy()
             playerRef.current = null
         }
@@ -202,6 +266,7 @@ export const MpvPlayerView = React.forwardRef<MpvPlayerViewRef, MpvPlayerViewPro
             setSubtitleMarginY: marginY => updateStyle({ marginY }),
             setSubtitleAlignX: alignX => updateStyle({ alignX }),
             setSubtitleAlignY: alignY => updateStyle({ alignY }),
+            setAssRendering: enabled => run(p => p.setAssRendering(enabled)),
 
             getAudioTracks: async () => player().getAudioTracks(),
             setAudioTrack: trackId => run(p => p.setAudioTrack(trackId)),
@@ -217,12 +282,17 @@ export const MpvPlayerView = React.forwardRef<MpvPlayerViewRef, MpvPlayerViewPro
         }
     }, [])
 
+    const imageCues = cues.filter(cue => cue.image)
+    const picture = pictureRect(viewSize, videoSize)
+    const pictureScale = zoom.scale * (zoom.fill ? coverFactor(viewSize, videoSize) : 1)
+
     return (
         <View
             {...viewProps}
             style={[{ backgroundColor: "#000000", overflow: "hidden" }, style]}
             onLayout={(event) => {
-                setHeight(event.nativeEvent.layout.height)
+                const { width, height } = event.nativeEvent.layout
+                setViewSize({ width, height })
                 viewProps.onLayout?.(event)
             }}
         >
@@ -241,6 +311,25 @@ export const MpvPlayerView = React.forwardRef<MpvPlayerViewRef, MpvPlayerViewPro
                     transform: zoom.scale !== 1 ? `scale(${zoom.scale})` : undefined,
                 }}
             />
+            {/* What belongs to the picture (libass's canvas, PGS images) zooms with it. */}
+            <div
+                style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    height: "100%",
+                    pointerEvents: "none",
+                    transform: pictureScale !== 1 ? `scale(${pictureScale})` : undefined,
+                }}
+            >
+                <div ref={subtitleHostRef} style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }} />
+                {picture && imageCues.length > 0 && (
+                    <div style={{ position: "absolute", ...picture }}>
+                        {imageCues.map((cue, index) => <ImageSubtitle key={`${cue.start}-${index}`} image={cue.image!} video={videoSize} />)}
+                    </div>
+                )}
+            </div>
             <SubtitleOverlay cues={cues} style={subtitleStyle} height={height} />
         </View>
     )

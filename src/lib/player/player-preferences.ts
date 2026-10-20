@@ -58,6 +58,11 @@ export type PlayerPreferences = {
     androidVideoOutput: MpvVideoOutput
     /** Whether to show live playback diagnostics over the video. */
     showStats: boolean
+    /**
+     * webOS player: draw ASS subtitles with libass (fonts, styling, signs and
+     * positioning) rather than as plain text lines. mpv always uses libass.
+     */
+    assRendering: boolean
 }
 
 const DEFAULTS: PlayerPreferences = {
@@ -83,6 +88,7 @@ const DEFAULTS: PlayerPreferences = {
     externalPlayerTemplate: null,
     androidVideoOutput: "gpu-next",
     showStats: false,
+    assRendering: true,
 }
 
 const STORAGE_KEY = "player-prefs"
@@ -137,6 +143,23 @@ function parseLanguageTags(pref: string): string[] {
         .split(",")
         .map(t => t.trim().toLowerCase())
         .filter(Boolean)
+}
+
+/**
+ * The first track whose language and title match none of the ignored labels
+ * (e.g. "signs & songs"), for when no track is in a preferred language.
+ */
+export function findFallbackTrack(
+    tracks: Array<{ id: number; language?: string; title?: string }>,
+    ignoredString?: string,
+): number | null {
+    const ignoredTags = ignoredString ? parseLanguageTags(ignoredString) : []
+    const track = tracks.find(track => {
+        const lang = (track.language ?? "").toLowerCase()
+        const title = (track.title ?? "").toLowerCase()
+        return !ignoredTags.some(tag => lang.includes(tag) || title.includes(tag))
+    })
+    return track?.id ?? null
 }
 
 /**
