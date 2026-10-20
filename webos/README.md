@@ -96,6 +96,29 @@ so the two screens share one result. If AniList fails, the start screen just lea
 trending slides and row out, without an error message on every launch. Android TV and
 tvOS keep their start screen as it was.
 
+**Opening Tenji to a show (launch parameters).** Tenji reads the parameters it is
+launched with, at start and when it is launched again while running (LG's `webOSLaunch` /
+`webOSRelaunch` events, and `launchParams` for the first launch). Once the server has
+answered (not while Tenji is still connecting) it opens what they ask for:
+
+| Parameters | Opens |
+| --- | --- |
+| `{"mediaId": 21}` | the show with that AniList id |
+| `{"screen": "home"}` | the start screen |
+| `{"screen": "discover"}` | Discover |
+
+```bash
+ares-launch --device tv app.seanime.tenji -p '{"mediaId":21}'
+```
+
+Anything that can launch a webOS app with parameters (the Application Manager's `launch`
+call, home automation hubs) can do the same. They never start playback, and while the
+player is open they are ignored so it isn't interrupted. Launching from the app's tile
+(no parameters) leaves Tenji where it was. A request waits for the server at most 45
+seconds, and is dropped if the server address changes in the meantime, so a show doesn't
+open long after it was asked for. `"screen"` closes a show or list open above the tabs,
+or switches tabs when none is.
+
 **Why not the TV's home screen.** According to LG's developer documentation and LG staff
 on its developer forum, the cards LG shows above an app's tile on the home screen (the
 *Preview Area*), LG's home search and content recommendations are only for LG's contracted
@@ -345,6 +368,8 @@ are released, so a long seek doesn't continue when you come back.
   another machine; and that large server messages pass over the bus. LG documents no size
   limit for Luna messages. LG's ACG guide doesn't say whether webOS 26 checks an app's
   calls to its own service; a refused call counts as a missing service.
+- Launch parameters (see Start screen): that the TV fills `launchParams` and the events'
+  `detail` as LG documents, on the first launch and on a relaunch.
 - Whether a sideloaded app really can't show a toast or put cards on the home screen of
   the C3. That is what LG's docs and staff say (see Start screen); it was not tried.
 

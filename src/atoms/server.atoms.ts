@@ -7,7 +7,8 @@ import { atomWithStorage } from "jotai/utils"
  * Server URL
  */
 
-const serverUrlAtom = atomWithStorage<string | null>("sea-server-url", null, createAtomStorage<string | null>(), { getOnInit: true })
+const SERVER_URL_STORAGE_KEY = "sea-server-url"
+const serverUrlAtom = atomWithStorage<string | null>(SERVER_URL_STORAGE_KEY, null, createAtomStorage<string | null>(), { getOnInit: true })
 export const SERVER_AUTH_TOKEN_STORAGE_KEY = "sea-server-auth-token"
 const serverAuthTokenAtom = atomWithStorage<string | null>(SERVER_AUTH_TOKEN_STORAGE_KEY,
     null,
@@ -16,6 +17,11 @@ const serverAuthTokenAtom = atomWithStorage<string | null>(SERVER_AUTH_TOKEN_STO
 
 export function useServerUrl() {
     return useAtomValue(serverUrlAtom)
+}
+
+/** The saved server URL, outside React. */
+export function getStoredServerUrl() {
+    return getStoredJsonValue<string | null>(SERVER_URL_STORAGE_KEY)
 }
 
 export function useServerUrlProtocol() {

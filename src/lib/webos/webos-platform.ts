@@ -7,6 +7,8 @@
 type WebOSSystem = {
     platformBack?: () => void
     deviceInfo?: string
+    /** The parameters the app was (last) launched with, a JSON string; LG's webOSDev.launchParams() parses it. */
+    launchParams?: unknown
 }
 
 type WebOSWindow = {
@@ -89,6 +91,44 @@ export function onRelaunch(callback: () => void) {
     if (typeof document === "undefined") return () => {}
     document.addEventListener("webOSRelaunch", callback, true)
     return () => document.removeEventListener("webOSRelaunch", callback, true)
+}
+
+function hasLaunchParams(owner: WebOSSystem | undefined) {
+    const params = owner?.launchParams
+    return params !== undefined && params !== null && params !== ""
+}
+
+/**
+ * The launch parameters as the TV keeps them. The `webOSLaunch` event can
+ * fire before the bundle has run, so the first launch is read from here.
+ * webOS 5 and later have them on `webOSSystem`, older releases on `PalmSystem`.
+ */
+export function findLaunchParams(w: WebOSWindow): unknown {
+    for (const owner of [w.webOSSystem, w.PalmSystem]) {
+        if (hasLaunchParams(owner)) return owner!.launchParams
+    }
+    return undefined
+}
+
+export function readLaunchParams(): unknown {
+    if (typeof window === "undefined") return undefined
+    return findLaunchParams(window as WebOSWindow)
+}
+
+/**
+ * `webOSLaunch` (launched) and `webOSRelaunch` (launched again while running)
+ * carry the parameters in `detail`. LG registers both in the capture phase.
+ */
+export function onLaunchParams(callback: (params: unknown, relaunch: boolean) => void) {
+    if (typeof document === "undefined") return () => {}
+    const onLaunch = (event: Event) => callback((event as CustomEvent).detail, false)
+    const onRelaunchEvent = (event: Event) => callback((event as CustomEvent).detail, true)
+    document.addEventListener("webOSLaunch", onLaunch, true)
+    document.addEventListener("webOSRelaunch", onRelaunchEvent, true)
+    return () => {
+        document.removeEventListener("webOSLaunch", onLaunch, true)
+        document.removeEventListener("webOSRelaunch", onRelaunchEvent, true)
+    }
 }
 
 type KeyboardEventName = "keyboardDidShow" | "keyboardDidHide" | "keyboardWillShow" | "keyboardWillHide"
