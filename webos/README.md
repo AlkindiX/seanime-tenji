@@ -24,6 +24,13 @@ media keys; the Magic Remote pointer also works.
   password = "your password"
   ```
 
+  Restart the server afterwards. Without a password the server answers every request
+  with `403 this action requires either a server password or a trusted local origin`;
+  the app says so on the setup screen instead of staying on "Connecting".
+- **The server reachable from the TV.** It has to listen on the network (`host = '0.0.0.0'`,
+  not `127.0.0.1`), and the computer's firewall has to let its port (43211 by default)
+  in. On Windows, a network set to *Public* blocks it unless Seanime has an inbound rule.
+
 ## Installing
 
 Build the package from the repository root:
@@ -111,11 +118,26 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   a TV*: desktop Chromium plays the `<source>` but ignores the option, so the checks covered
   passing the position, the seek that follows and the fallback, not the speed-up.
 - **Audio tracks** can be switched when the TV exposes them, which webOS does.
-- **Subtitles** are drawn by the app: SRT, WebVTT and ASS dialogue lines. ASS styling and
-  positioned typesetting (signs) are not rendered.
+- **Subtitles** are drawn by the app.
+  - **ASS/SSA** are drawn by libass, as mpv does on the other builds: fonts (the ones the
+    file carries, from the server), styling, signs, positioning and animation. libass runs
+    in WebAssembly ([JASSUB](https://github.com/ThaUnknown/jassub)) in a worker, drawing
+    on a canvas over the video. *Subtitle styling* under Audio & subtitles switches to
+    plain text lines instead (what's left of the dialogue, without signs), which is also
+    used when libass can't start on a TV.
+  - **SRT and WebVTT** are drawn as text in the subtitle size you pick.
+  - **PGS** (image subtitles of Blu-ray rips) in torrent and debrid streams are shown as
+    the server decodes them, placed where the disc puts them.
   - For library files, embedded tracks are extracted by the server. This needs its
-    media streaming module and FFmpeg on the server.
-  - Embedded subtitles in torrent and debrid streams are not available.
+    media streaming module and FFmpeg on the server. PGS tracks of library files are not
+    handled yet.
+  - Torrent and debrid streams are started with `playbackType: "nativeplayer"`, the
+    server's own player pipeline: the TV plays the server's directstream URL, and the
+    server reads the MKV's subtitle tracks as it serves the file and sends them over the
+    WebSocket. They fill in from the start and again from where you seek.
+  - A subtitle track is turned on by the preferred languages (`eng, en, english` by
+    default), or else the first track that isn't signs & songs. Choosing *Off* in the
+    player keeps subtitles off for later episodes until a track is chosen again.
 - **Not available:** downloads and offline mode (as on the other TV builds), external
   players, picture-in-picture, audio delay.
 - **Online streams** that require a `Referer` header can't send it from a browser.
@@ -136,6 +158,23 @@ configs); `getConfigs` has no row of its own, so this is an assumption to check.
 or unanswered call (3 seconds) just leaves that fact unknown, and unknown never triggers
 transcoding.
 
+## Look and feel
+
+- **Transitions.** Switching tabs slides the new one in from the side its nav item is on;
+  opening a page slides it in from the right and Back eases the previous one in from the
+  left. They are Web Animations on opacity and transform, which the TV composites without
+  JavaScript per frame (`src/components/tv/tv-screen-transition.tsx`).
+- **Library hero.** The backdrop cross-fades between titles, the text eases in, and the
+  current page dot fills up until the next title. It doesn't rotate while one of its
+  buttons has focus. Its buttons stay in place whatever the title's length. Watch progress
+  is a short meter next to the episode ("19m left") and the button says *Resume*.
+- **Under the nav bar.** Lists scrolled up under the floating nav bar fade into the
+  background (`tv-nav-scrim.tsx`; Android TV uses `fadingEdgeLength` for this).
+- **Speed.** Focus highlights scale with CSS transitions, rows know their card sizes up
+  front, and cards re-render only when their own data changes. Measured in desktop Edge
+  slowed to about TV speed: arrow keys use a third to a fifth of the CPU they did, and
+  going back to the library blocks the screen 15-30 % less.
+
 ## Remote control
 
 The arrow keys, OK and Back work as on Android TV. LG remotes also have these keys:
@@ -154,9 +193,23 @@ The arrow keys, OK and Back work as on Android TV. LG remotes also have these ke
 
 Android TV remotes that have these keys get the same player shortcuts.
 
-**Magic Remote pointer.** Moving the pointer or clicking the video shows the player
-controls, and clicking the timeline seeks to that spot. Focus follows the pointer. When
-the pointer hides or a system overlay takes it, the D-pad highlight comes back.
+**Magic Remote pointer.** Moving the pointer shows the player controls, clicking the
+video pauses or plays, and clicking the timeline seeks to that spot. Focus follows the
+pointer. When the pointer hides or a system overlay takes it, the D-pad highlight comes
+back.
+
+**Dragging.** Press the wheel (OK) on a row and move the pointer to drag the row sideways,
+or on the page to drag it up and down; let go while moving and it glides on a little. A
+press that moves less than 12 px is a click, and the click that ends a drag doesn't open
+the card under the pointer.
+
+**Pausing with the wheel.** The wheel is the OK button. In the player, pressing it while
+the controls are hidden pauses or plays (and shows them); with the pointer showing, so
+does clicking the video. When the controls are up, OK presses the focused button as usual.
+
+**Scrolling with the arrows.** Lists and the page glide to the focused card. Holding an
+arrow key or tapping it quickly extends that one movement rather than starting a new
+animation for every step.
 
 **Wheel.** With the pointer showing, the wheel scrolls the page; over a row that only
 scrolls sideways it scrolls the row, and the page again once the row reaches its end.
@@ -176,6 +229,9 @@ are released, so a long seek doesn't continue when you come back.
   same actions.
 - **OK in pointer mode.** If a TV sends both a keydown 13 and a click for one OK press, a
   button would fire twice. This needs checking on a TV before adding any de-duplication.
+  Pausing from the wheel already counts only one of the two (within 400 ms).
+- Pausing with the wheel, and how dragging feels with a real Magic Remote. Dragging was
+  checked in desktop Chromium with a mouse.
 - How far one wheel notch scrolls (`deltaY` per notch) on a real Magic Remote.
 - Playback of the transcoded HLS stream, and whether `canPlayType`/`MediaSource` answers
   on a TV match what its file player really decodes. Desktop Chromium was used for the
@@ -183,6 +239,12 @@ are released, so a long seek doesn't continue when you come back.
   authenticated) were checked but not its picture.
 - The real answers of the Luna calls on each webOS version, and ACG enforcement on webOS 26.
 - Whether `mediaOption` resumes faster on a TV (see Resuming).
+- libass on a TV: its speed with heavy typesetting, and loading its worker and wasm from
+  `file://` (they are read with XMLHttpRequest and handed over as blob URLs, as a worker
+  can't `fetch()` files). Checked in desktop Chromium over http. If it fails, subtitles
+  fall back to plain text. JASSUB's worker needs Chromium 80 for `type: "module"`; the
+  build makes it a classic script, so webOS 6 may run it too.
+- PGS placement was checked with a test image, not a real Blu-ray track.
 
 ## Developing
 
