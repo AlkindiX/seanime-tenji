@@ -10,6 +10,7 @@ import {
     useAnilistMangaEntryListDataAtom,
     useAnimeLibraryEntryDataAtom,
 } from "@/atoms/anilist-collection.atoms"
+import { reuseEqualEntries } from "@/lib/utils/reuse-equal-entries"
 import React from "react"
 
 export function useAnilistCollectionLoader() {
@@ -40,7 +41,8 @@ export function useAnilistCollectionLoader() {
                 }
                 return acc
             }, {} as Record<string, Anime_EntryListData>)
-            setAnimeEntryListData(listData || {})
+            // Cards re-render only for media whose entry changed.
+            setAnimeEntryListData(previous => reuseEqualEntries(previous, listData || {}))
         }
     }, [_animeCollection])
 
@@ -55,7 +57,7 @@ export function useAnilistCollectionLoader() {
                 return acc
             }, {} as Record<string, AnimeLibraryEntryData>)
 
-            setAnimeLibraryEntryData(entryData || {})
+            setAnimeLibraryEntryData(previous => reuseEqualEntries(previous, entryData || {}))
         }
     }, [_animeLibraryCollection])
 
@@ -80,7 +82,7 @@ export function useAnilistCollectionLoader() {
                 return acc
             }, {} as Record<string, Manga_EntryListData>)
 
-            setMangaEntryListData(listData || {})
+            setMangaEntryListData(previous => reuseEqualEntries(previous, listData || {}))
         }
     }, [_mangaCollection])
 

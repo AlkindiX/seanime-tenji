@@ -3,7 +3,7 @@ import { tvKeyAction } from "@/components/tv/tv-native"
 import { cn } from "@/lib/utils"
 import { useSegments } from "expo-router"
 import * as React from "react"
-import { Animated, Pressable, type PressableProps, Text, useTVEventHandler, View } from "react-native"
+import { Animated, Platform, Pressable, type PressableProps, Text, useTVEventHandler, View } from "react-native"
 
 const activeFocusLabels = new Set<string>()
 let checkTimeout: ReturnType<typeof setTimeout> | null = null
@@ -24,6 +24,34 @@ function verifySingleFocus() {
 }
 
 const uniqueCounter = { current: 0 }
+
+const FOCUS_SCALE_MS = 110
+
+/**
+ * webOS: the browser animates the focus scale itself (a CSS transition, run
+ * by the compositor). react-native-web has no native driver, so Animated
+ * would run in JavaScript, restyling and repainting the card every frame,
+ * which the TV's CPU and GPU notice on every key press.
+ */
+const CSS_FOCUS_SCALE = Platform.OS === "web"
+const cssScaleStyles = new Map<number, object>()
+
+function cssScaleStyle(scale: number) {
+    let style = cssScaleStyles.get(scale)
+    if (!style) {
+        style = {
+            transform: [{ scale }],
+            transitionProperty: "transform",
+            transitionDuration: `${FOCUS_SCALE_MS}ms`,
+            transitionTimingFunction: "ease-out",
+        }
+        cssScaleStyles.set(scale, style)
+    }
+    return style
+}
+
+/** Wraps what scales on focus: a plain View on webOS (see CSS_FOCUS_SCALE), Animated.View elsewhere. */
+export const TVFocusScaleView = (CSS_FOCUS_SCALE ? View : Animated.View) as typeof Animated.View
 
 export function useTVFocus(scaleTo = 1.04, debugLabel?: string) {
     const [focused, setFocused] = React.useState(false)
@@ -47,12 +75,15 @@ export function useTVFocus(scaleTo = 1.04, debugLabel?: string) {
     }, [label])
 
     const run = React.useCallback((value: number) => {
+        if (CSS_FOCUS_SCALE) return
         Animated.timing(scale, {
             toValue: value,
-            duration: 110,
+            duration: FOCUS_SCALE_MS,
             useNativeDriver: true,
         }).start()
     }, [scale])
+
+    const nativeStyle = React.useMemo(() => ({ transform: [{ scale }] }), [scale])
 
     const focus = React.useCallback(() => {
         activeFocusLabels.add(label)
@@ -78,7 +109,7 @@ export function useTVFocus(scaleTo = 1.04, debugLabel?: string) {
         focused,
         focus,
         blur,
-        style: { transform: [{ scale }] },
+        style: CSS_FOCUS_SCALE ? cssScaleStyle(focused ? scaleTo : 1) as typeof nativeStyle : nativeStyle,
     }
 }
 

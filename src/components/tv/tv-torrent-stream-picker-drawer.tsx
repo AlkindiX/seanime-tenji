@@ -19,7 +19,7 @@ import type { StreamMode } from "@/components/features/torrentstream/use-torrent
 import { CenteredSpinner } from "@/components/shared/centered-spinner"
 import { TVButton, TVDrawer, TVInput, TVPillButton, useTVFocus } from "@/components/tv"
 import type { TVInputHandle } from "@/components/tv/tv-input"
-import { tvSize } from "@/components/tv/tv-scale"
+import { ROW_OVERFLOW, tvSize } from "@/components/tv/tv-scale"
 import { Ionicons } from "@expo/vector-icons"
 import * as React from "react"
 import { Animated, FlatList, Pressable, ScrollView, Text, TVFocusGuideView, View } from "react-native"
@@ -418,7 +418,7 @@ export function TVTorrentStreamPickerDrawer({
                                         gap: tvSize(10),
                                         paddingVertical: tvSize(8),
                                     }}
-                                    style={{ overflow: "visible" }}
+                                    style={ROW_OVERFLOW}
                                     renderItem={({
                                         item: p,
                                     }: {
