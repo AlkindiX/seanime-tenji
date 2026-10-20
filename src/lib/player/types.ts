@@ -10,7 +10,7 @@ import type {
     Onlinestream_VideoSource,
 } from "@/api/generated/types"
 import type { ServerLocalIdentity } from "@/lib/offline/server-local-store"
-import type { MpvChapter, MpvExternalSubtitle, MpvMediaInfoSummary } from "expo-mpv-player"
+import type { MpvChapter, MpvExternalSubtitle, MpvMediaEvent, MpvMediaInfoSummary, MpvStreamedSubtitles } from "expo-mpv-player"
 
 ///////////////////////////////////////////////////////////////////////////////
 // Mobile playback source
@@ -87,11 +87,11 @@ export type MobilePlaybackSource = {
     /** Server base selected by the loopback/configured-address resolver. */
     serverLocalServerUrl?: string
 
-    /** Set for streams played through the server's player pipeline (webOS torrent and debrid). */
+    /** Stream type of a Seanime direct stream ("torrent", "debrid"…), web build only. */
     serverStreamType?: NativePlayer_StreamType
 
-    /** The server's playback id in that pipeline; also the id of the subtitle feed it fills. */
-    serverPlaybackId?: string
+    /** Playback id of a Seanime direct stream (web build), which reports the player's events to the server. */
+    directStreamPlaybackId?: string
 
     /** MKV metadata parsed by the backend (chapters, fonts, subtitle tracks). */
     mkvMetadata?: MKVParser_Metadata
@@ -124,6 +124,8 @@ export type MobilePlaybackSource = {
 export type WebPlaybackPlan = {
     /** Subtitle tracks the server extracted from the file. */
     externalSubtitles: MpvExternalSubtitle[]
+    /** Replaces the source's own subtitle files, e.g. with their URLs through the server's proxy. */
+    sourceSubtitles?: MpvExternalSubtitle[]
     /** Replaces the source URL and headers, e.g. with the server's HLS transcode. */
     url?: string
     headers?: Record<string, string>
@@ -136,8 +138,9 @@ export type WebPlaybackPlan = {
     maxVideoHeight?: number
     chapters?: MpvChapter[]
     mediaInfoSummary?: MpvMediaInfoSummary
-    /** Id of the subtitle feed the server fills during playback. */
-    subtitleFeed?: string
+    /** Subtitle lines a Seanime direct stream sends while playing, and where its player events go. */
+    streamedSubtitles?: MpvStreamedSubtitles
+    onMediaEvent?: (event: MpvMediaEvent) => void
     /** Fonts the file carries, for drawing its ASS subtitles with libass. */
     subtitleFonts?: string[]
     /**

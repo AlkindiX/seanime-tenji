@@ -1,10 +1,11 @@
 /**
  * Minimal subtitle parsing for the web player (SRT, WebVTT, ASS/SSA).
  *
- * Only dialogue text is kept: ASS styling and positioned typesetting (signs
- * drawn with \pos/\move/\p) need a renderer such as libass, which the web
- * build does not ship.
+ * For ASS only dialogue text is kept: these cues are the plain-text fallback
+ * for when libass (libass.ts), which draws the styling and positioned signs
+ * (\pos/\move/\p), is off or can't run.
  */
+import type { MpvSubtitleImage } from "../MpvPlayer.types"
 
 export type SubtitleCue = {
     start: number
@@ -17,17 +18,7 @@ export type SubtitleCue = {
 }
 
 /** A bitmap subtitle placed on the video's own pixel grid (`canvasWidth` × `canvasHeight`). */
-export type SubtitleImage = {
-    src: string
-    x: number
-    y: number
-    width: number
-    height: number
-    canvasWidth: number
-    canvasHeight: number
-    /** The part of the image shown at (x, y), when the stream crops it. */
-    crop?: { x: number; y: number; width: number; height: number }
-}
+export type SubtitleImage = MpvSubtitleImage
 
 function parseTimestamp(value: string): number {
     const parts = value.trim().replace(",", ".").split(":")
@@ -111,7 +102,7 @@ function parseSrtOrVtt(content: string): SubtitleCue[] {
 export type AssTopStyles = Map<string, boolean>
 
 /** The styles of an ASS/SSA script, or of the header an MKV track keeps in CodecPrivate. */
-export function parseAssTopStyles(content: string): AssTopStyles {
+export function parseAssStyles(content: string): AssTopStyles {
     const topStyles: AssTopStyles = new Map()
     let section = ""
     let styleFormat: string[] = []
@@ -139,49 +130,14 @@ export function parseAssTopStyles(content: string): AssTopStyles {
             }
         }
     }
-
     return topStyles
 }
 
-function parseAss(content: string): SubtitleCue[] {
-    const cues: SubtitleCue[] = []
-    const topStyles = parseAssTopStyles(content)
-    let section = ""
-    let format: string[] = []
-
-    for (const rawLine of content.replace(/\r/g, "").split("\n")) {
-        const line = rawLine.trim()
-        if (line.startsWith("[")) {
-            section = line.toLowerCase()
-            continue
-        }
-        const lower = line.toLowerCase()
-        if (section !== "[events]") continue
-
-        if (lower.startsWith("format:")) {
-            format = line.slice(7).split(",").map(field => field.trim().toLowerCase())
-            continue
-        }
-        if (!lower.startsWith("dialogue:") || format.length === 0) continue
-
-        // Text is the last field and may itself contain commas.
-        const values = line.slice(9).split(",")
-        const fields = values.slice(0, format.length - 1)
-        fields.push(values.slice(format.length - 1).join(","))
-        const field = (name: string) => fields[format.indexOf(name)]?.trim() ?? ""
-
-        const cue = assDialogueCue(field("text"), field("style"), parseTimestamp(field("start")), parseTimestamp(field("end")), topStyles)
-        if (cue) cues.push(cue)
-    }
-
-    return cues.sort((a, b) => a.start - b.start)
-}
-
 /**
- * One ASS dialogue text as a cue, or null for an empty line or one that only
- * makes sense positioned (signs drawn with \pos/\move/\p).
+ * One ASS dialogue line as a cue, or null when there is nothing to show:
+ * an empty line, or positioned typesetting (signs) this player can't draw.
  */
-export function assDialogueCue(raw: string, style: string, start: number, end: number, topStyles: AssTopStyles): SubtitleCue | null {
+export function assDialogueCue(raw: string, start: number, end: number, style: string, topStyles: AssTopStyles): SubtitleCue | null {
     if (/\\(pos|move)\(|\\p[1-9]/.test(raw)) return null
 
     const text = raw
@@ -198,6 +154,40 @@ export function assDialogueCue(raw: string, style: string, start: number, end: n
         // An override in the line wins over its style's alignment.
         top: overrideIsTop(raw) ?? topStyles.get(style.trim().replace(/^\*/, "")) ?? false,
     }
+}
+
+function parseAss(content: string): SubtitleCue[] {
+    const cues: SubtitleCue[] = []
+    const topStyles = parseAssStyles(content)
+    let section = ""
+    let format: string[] = []
+
+    for (const rawLine of content.replace(/\r/g, "").split("\n")) {
+        const line = rawLine.trim()
+        if (line.startsWith("[")) {
+            section = line.toLowerCase()
+            continue
+        }
+        if (section !== "[events]") continue
+
+        const lower = line.toLowerCase()
+        if (lower.startsWith("format:")) {
+            format = line.slice(7).split(",").map(field => field.trim().toLowerCase())
+            continue
+        }
+        if (!lower.startsWith("dialogue:") || format.length === 0) continue
+
+        // Text is the last field and may itself contain commas.
+        const values = line.slice(9).split(",")
+        const fields = values.slice(0, format.length - 1)
+        fields.push(values.slice(format.length - 1).join(","))
+        const field = (name: string) => fields[format.indexOf(name)]?.trim() ?? ""
+
+        const cue = assDialogueCue(field("text"), parseTimestamp(field("start")), parseTimestamp(field("end")), field("style"), topStyles)
+        if (cue) cues.push(cue)
+    }
+
+    return cues.sort((a, b) => a.start - b.start)
 }
 
 export function isAssScript(content: string) {

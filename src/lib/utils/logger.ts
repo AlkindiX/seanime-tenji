@@ -2,6 +2,10 @@ import { recordOfflineLog } from "@/lib/offline-logger"
 
 export const logger = (prefix: string) => {
     return {
+        // only saved while logging is on; for the detail a bug report needs
+        debug: (...data: unknown[]) => {
+            recordOfflineLog("debug", prefix, data, false)
+        },
         info: (...data: unknown[]) => {
             recordOfflineLog("info", prefix, data, __DEV__)
         },

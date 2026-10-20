@@ -754,7 +754,9 @@ function PlayerScreenInner() {
     }, [setReturnFocus, source])
 
     const stopTVTorrent = React.useCallback(() => {
-        if (!Platform.isTV || !isTorrentSource(source)) return
+        // A direct stream (webOS) is stopped by the player's "video-terminated";
+        // dropping here would also drop a preloaded next episode.
+        if (!Platform.isTV || !isTorrentSource(source) || source?.directStreamPlaybackId) return
 
         void (async () => {
             try {

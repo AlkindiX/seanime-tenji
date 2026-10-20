@@ -30,16 +30,20 @@ src/components/
 src/lib/
   player/                 playback: session.ts (WS events -> source), use-mpv-player.ts (view bridge),
                           web-playback-plan.web.ts (webOS: direct play vs transcode, subs, fonts),
-                          server-playback.ts (webOS torrent/debrid via the server's "nativeplayer"
-                          pipeline: streamed MKV subtitles, VideoCore client events),
+                          direct-stream.ts + direct-stream-format.ts (webOS torrent/debrid via the
+                          server's direct stream, "nativeplayer": streamed MKV subtitles, ASS packets
+                          and PGS images, VideoCore client events), online-proxy.ts,
                           player-preferences.ts (MMKV-backed prefs)
-  webos/                  the webOS platform layer (see below)
+  webos/                  the webOS platform layer (see below); luna-websocket.ts relays the
+                          WebSocket through the app's JS service (webos/service/)
+  debug-log-receiver.ts   streams logs to `npm run debug:logs` (tools/debug-log-receiver.mjs)
   offline/                offline mode, mutation queue, local snapshots
 src/atoms/                jotai atoms (server URL/token in MMKV via atoms/storage.ts)
 modules/expo-mpv-player/  player module: native mpv + web/ (web-video-player.ts, subtitles.ts,
-                          libass.ts = JASSUB/libass for ASS), subtitle-feed.ts (live subtitle tracks)
-webos/                    build.mjs (export -> lower JS/CSS for Chromium 79 -> polyfills -> JASSUB -> .ipk),
-                          jassub.mjs, appinfo.json, README.md
+                          libass.ts = JASSUB/libass for ASS; streamed tracks feed it)
+webos/                    build.mjs (export -> lower JS/CSS for Chromium 79 -> polyfills -> JASSUB ->
+                          JS service -> .ipk), jassub.mjs, service-build.mjs, service/ (WebSocket
+                          relay for Node 8), appinfo.json, README.md
 tests/*.test.ts           node:test unit tests (pure modules only)
 ```
 
@@ -52,7 +56,7 @@ tests/*.test.ts           node:test unit tests (pure modules only)
 | Remote keys, Magic Remote pointer, wheel, drag, Back | `src/lib/webos/remote.ts`, `remote-input.ts` |
 | Player keys/shortcuts on TV | `useTVEventHandler` + `handleRemoteShortcut` in `app/(app)/(media)/player.tsx` |
 | What the webOS player plays (codecs, transcode, subs) | `src/lib/player/web-playback-plan.web.ts`, `src/lib/webos/playback-capabilities.ts` |
-| Torrent/debrid stream start | `src/components/features/torrentstream/use-torrent-stream-controller.ts` (`STREAM_PLAYBACK_TYPE`) |
+| Torrent/debrid stream start | `src/components/features/torrentstream/use-torrent-stream-controller.ts` (`streamPlaybackType()`) |
 | Stream WS events -> player source | `usePlayerEventListener` in `src/lib/player/session.ts` |
 | Subtitle rendering on webOS | `modules/expo-mpv-player/src/web/` (`web-video-player.ts`, `subtitles.ts`, `libass.ts`) |
 | Server endpoint or type | `grep -n "<Name>" src/api/generated/endpoints.ts src/api/generated/types.ts` |

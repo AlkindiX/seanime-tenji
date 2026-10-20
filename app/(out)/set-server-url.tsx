@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label"
 import { IMAGES } from "@/constants/images"
 import { logger } from "@/lib/utils/logger"
 import { toast } from "@/lib/utils/toast"
+import { useQueryClient } from "@tanstack/react-query"
 import { router } from "expo-router"
 import * as React from "react"
 import { Image, KeyboardAvoidingView, Platform, Text, View } from "react-native"
@@ -28,6 +29,7 @@ export default function Screen() {
     // TV only: a toast is gone before it can be read from across the room
     const [tvError, setTvError] = React.useState<string | null>(null)
     const setServerUrl = useSetServerUrl()
+    const queryClient = useQueryClient()
 
     // React.useEffect(() => {
     //     if (!inputValue && currentServerUrl) {
@@ -77,6 +79,8 @@ export default function Screen() {
                 })
 
                 await setServerStatus(null)
+                // the persisted status query too, or the app starts from the old server's answer
+                queryClient.removeQueries({ queryKey: [API_ENDPOINTS.STATUS.GetStatus.key] })
                 await setServerAuthToken(hashedPassword)
                 await setServerUrl(sanitizedUrl)
 
@@ -109,9 +113,8 @@ export default function Screen() {
                         + "([server] password in config.toml), restart the server, then connect again.")
                 } else if (isConnectivityError(error)) {
                     showError(Platform.isTV
-                        ? `Could not reach ${sanitizedUrl}. Check that the server is running and has a password (the TV app `
-                        + "needs one), that it listens on your network (host 0.0.0.0, not 127.0.0.1) and that the computer's "
-                        + "firewall lets this port in."
+                        ? `Could not reach ${sanitizedUrl}. Check that the server is running, that it listens on your network `
+                        + "(host 0.0.0.0, not 127.0.0.1) and that the computer's firewall lets this port in."
                         : "Could not reach the server")
                 } else {
                     showError(message)
@@ -121,7 +124,7 @@ export default function Screen() {
                 setIsSubmitting(false)
             }
         })()
-    }, [inputValue, passwordValue, setServerAuthToken, setServerStatus, setServerUrl, showErrorToast])
+    }, [inputValue, passwordValue, queryClient, setServerAuthToken, setServerStatus, setServerUrl, showErrorToast])
 
     if (Platform.isTV) {
         return (

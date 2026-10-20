@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { activeCues, assDialogueCue, isAssScript, parseAssTopStyles, parseSubtitles } from "../modules/expo-mpv-player/src/web/subtitles.ts"
+import { activeCues, assDialogueCue, isAssScript, parseAssStyles, parseSubtitles } from "../modules/expo-mpv-player/src/web/subtitles.ts"
 
 test("srt cues keep their timing and lines", () => {
     const cues = parseSubtitles([
@@ -145,18 +145,18 @@ test("an MKV track's ASS header gives the styles that sit at the top", () => {
         "Style: Default,Arial,20,2",
         "Style: Top,Arial,20,8",
     ].join("\n")
-    const styles = parseAssTopStyles(header)
+    const styles = parseAssStyles(header)
     assert.equal(styles.get("Default"), false)
     assert.equal(styles.get("Top"), true)
 })
 
 test("streamed ASS dialogue becomes a cue unless it is positioned", () => {
-    const styles = parseAssTopStyles("[V4+ Styles]\nFormat: Name, Alignment\nStyle: Top,8")
-    assert.deepEqual(assDialogueCue("{\\i1}Hello\\Nthere", "Default", 1, 2.5, styles), { start: 1, end: 2.5, text: "Hello\nthere", top: false })
-    assert.equal(assDialogueCue("Sign", "Top", 0, 1, styles)?.top, true)
-    assert.equal(assDialogueCue("{\\an8}Up here", "Default", 0, 1, styles)?.top, true)
-    assert.equal(assDialogueCue("{\\pos(10,20)}Sign", "Default", 0, 1, styles), null)
-    assert.equal(assDialogueCue("{\\i1}", "Default", 0, 1, styles), null)
+    const styles = parseAssStyles("[V4+ Styles]\nFormat: Name, Alignment\nStyle: Top,8")
+    assert.deepEqual(assDialogueCue("{\\i1}Hello\\Nthere", 1, 2.5, "Default", styles), { start: 1, end: 2.5, text: "Hello\nthere", top: false })
+    assert.equal(assDialogueCue("Sign", 0, 1, "Top", styles)?.top, true)
+    assert.equal(assDialogueCue("{\\an8}Up here", 0, 1, "Default", styles)?.top, true)
+    assert.equal(assDialogueCue("{\\pos(10,20)}Sign", 0, 1, "Default", styles), null)
+    assert.equal(assDialogueCue("{\\i1}", 0, 1, "Default", styles), null)
 })
 
 test("an ASS script is told apart from SRT and WebVTT, for libass", () => {

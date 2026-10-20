@@ -6,6 +6,7 @@ import { LuffyError } from "@/components/shared/luffy-error"
 import { Button } from "@/components/ui/button"
 import {
     debridStreamStateAtom,
+    directStreamLoadingMessageAtom,
     getTorrentStreamLoadingLabel,
     streamSessionModeAtom,
     torrentStreamIsLoadedAtom,
@@ -34,6 +35,7 @@ export function AnimeEntryTorrentStreamSection({ entry }: AnimeEntryTorrentStrea
     const progress = entry.listData?.progress ?? 0
     const sessionMode = useAtomValue(streamSessionModeAtom)
     const debridStreamState = useAtomValue(debridStreamStateAtom)
+    const directStreamMessage = useAtomValue(directStreamLoadingMessageAtom)
     const isPreparingStream = useAtomValue(torrentStreamIsPreparingAtom) && sessionMode === torrentStream.streamMode
     const setIsPreparingStream = useSetAtom(torrentStreamIsPreparingAtom)
     const isLoadedStream = useAtomValue(torrentStreamIsLoadedAtom) && sessionMode === torrentStream.streamMode
@@ -72,6 +74,8 @@ export function AnimeEntryTorrentStreamSection({ entry }: AnimeEntryTorrentStrea
     }, [statusVisible])
 
     const loadingLabel = React.useMemo(() => {
+        // The server's own step while it opens a direct stream (webOS).
+        if (directStreamMessage) return directStreamMessage
         if (torrentStream.streamMode === "debrid") {
             if (debridStreamState?.message === "External player link sent") {
                 return ""
@@ -80,7 +84,7 @@ export function AnimeEntryTorrentStreamSection({ entry }: AnimeEntryTorrentStrea
         }
 
         return getTorrentStreamLoadingLabel(loadingState, loadingTorrentName)
-    }, [debridStreamState?.message, loadingState, loadingTorrentName, torrentStream.streamMode])
+    }, [debridStreamState?.message, directStreamMessage, loadingState, loadingTorrentName, torrentStream.streamMode])
 
     const loadingLabelRef = React.useRef(loadingLabel)
 
@@ -197,8 +201,10 @@ export function AnimeEntryTorrentStreamSection({ entry }: AnimeEntryTorrentStrea
                                     </Text>
                                 )}
                             </View>
+                            {/* On webOS the D-pad can't reach it from the tabs, so it takes focus while loading. */}
                             <TVPillButton
                                 label="Cancel"
+                                preferred={Platform.OS === "web"}
                                 disabled={torrentStream.isStopping}
                                 onPress={stopTVStream}
                             />

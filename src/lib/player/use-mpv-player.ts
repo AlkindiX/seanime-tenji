@@ -120,7 +120,7 @@ export function useMpvPlayer() {
         if (!source || !playbackPlan) return undefined
 
         const prefs = getPlayerPreferences()
-        const externalSubtitles = source.externalSubtitles?.map(s => ({
+        const externalSubtitles = playbackPlan.sourceSubtitles ?? source.externalSubtitles?.map(s => ({
             url: s.url,
             title: s.language || undefined,
         }))
@@ -141,7 +141,8 @@ export function useMpvPlayer() {
         if (playbackPlan.maxVideoHeight) videoSource.maxVideoHeight = playbackPlan.maxVideoHeight
         if (playbackPlan.chapters?.length) videoSource.chapters = playbackPlan.chapters
         if (playbackPlan.mediaInfoSummary) videoSource.mediaInfoSummary = playbackPlan.mediaInfoSummary
-        if (playbackPlan.subtitleFeed) videoSource.subtitleFeed = playbackPlan.subtitleFeed
+        if (playbackPlan.streamedSubtitles) videoSource.streamedSubtitles = playbackPlan.streamedSubtitles
+        if (playbackPlan.onMediaEvent) videoSource.onMediaEvent = playbackPlan.onMediaEvent
         if (playbackPlan.subtitleFonts?.length) videoSource.subtitleFonts = playbackPlan.subtitleFonts
         if (!prefs.assRendering) videoSource.assRendering = false
         return videoSource

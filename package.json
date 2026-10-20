@@ -30,6 +30,7 @@
     "internal:ota:publish:remote:tv": "bash ./scripts/publish-ota-remote.sh --tv",
     "internal:bump-version": "node ./tools/bump-version.mjs",
     "update:anilist-tags": "node ./tools/update-anilist-tags.mjs",
+    "debug:logs": "node ./tools/debug-log-receiver.mjs",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test tests/*.test.ts",
     "fix": "npx expo install --fix",
     "ios": "EXPO_OFFLINE=1 expo start -c --ios",
@@ -136,7 +137,8 @@
     "core-js-compat": "^3.50.0",
     "esbuild": "^0.28.2",
     "lightningcss": "^1.33.0",
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "ws": "^7.5.13"
   },
   "expo": {
     "install": {

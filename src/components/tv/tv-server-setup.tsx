@@ -28,7 +28,7 @@ type TVServerSetupProps = {
     onContinue: () => void
 }
 
-type TVInputProps = {
+type TVLabeledInputProps = {
     value: string
     placeholder: string
     label: string
@@ -39,7 +39,7 @@ type TVInputProps = {
     onSubmitEditing: () => void
 }
 
-function TVInput({
+export function TVLabeledInput({
     value,
     placeholder,
     label,
@@ -48,7 +48,7 @@ function TVInput({
     keyboardType = "default",
     onChangeText,
     onSubmitEditing,
-}: TVInputProps) {
+}: TVLabeledInputProps) {
     const localRef = React.useRef<React.ElementRef<typeof TextInput> | null>(null)
     const fieldRef = React.useRef<React.ElementRef<typeof Pressable> | null>(null)
     const focusTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -180,7 +180,7 @@ export function TVServerSetup({
     }, [onBackToServer, passwordRequired])
 
     const field = passwordRequired ? (
-        <TVInput
+        <TVLabeledInput
             key="password"
             label="Server password"
             value={password}
@@ -191,7 +191,7 @@ export function TVServerSetup({
             onSubmitEditing={onContinue}
         />
     ) : (
-        <TVInput
+        <TVLabeledInput
             key="server"
             label="Server URL"
             value={serverUrl}

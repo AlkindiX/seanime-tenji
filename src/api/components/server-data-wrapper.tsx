@@ -50,8 +50,8 @@ export function ServerDataWrapper({ children }: { children: React.ReactNode }) {
 
     const [manualOffline, setManualOffline] = useManualOfflineMode()
 
-    const { data: _serverStatus, isLoading, error: statusError } = useGetStatus({ enabled: !manualOffline })
-    // A server without a password refuses the webOS app (Origin: null), whatever is cached
+    const { data: _serverStatus, isLoading, isFetchedAfterMount, isError, error: statusError } = useGetStatus({ enabled: !manualOffline })
+    // A server without a password may refuse the webOS app (Origin: null), whatever is cached
     const serverRefusesClient = !manualOffline && !_serverStatus && isUntrustedOriginError(statusError)
 
     React.useEffect(() => {
@@ -63,6 +63,10 @@ export function ServerDataWrapper({ children }: { children: React.ReactNode }) {
     // use either fresh or cached status, don't block on network
     const effectiveStatus = _serverStatus || cachedStatus
     const requiresServerAuth = !!effectiveStatus?.serverHasPassword
+    // The status restored from storage can predate the server's password being added or removed.
+    // Sending the user to setup on it unmounts this screen, which cancels the status request that
+    // would correct it, so the redirect below waits for this mount's own answer from the server.
+    const freshStatus = isFetchedAfterMount && !isError ? _serverStatus : undefined
     const isUnsupportedServerVersion = !!_serverStatus && !isServerVersionSupported(_serverStatus.version)
     const authVerification = useGetSettings({
         enabled: requiresServerAuth && !!serverAuthToken && !manualOffline,
@@ -115,13 +119,13 @@ export function ServerDataWrapper({ children }: { children: React.ReactNode }) {
 
     React.useEffect(() => {
         if (manualOffline) return
-        if (!requiresServerAuth) return
+        if (!freshStatus?.serverHasPassword) return
 
         if (!serverAuthToken || isInvalidServerAuth) {
             setServerStatus(null)
             router.replace("/(out)/set-server-url")
         }
-    }, [isInvalidServerAuth, requiresServerAuth, serverAuthToken, setServerStatus, manualOffline])
+    }, [freshStatus?.serverHasPassword, isInvalidServerAuth, serverAuthToken, setServerStatus, manualOffline])
 
     if (manualOffline) {
         return <ApiLoaders>
@@ -158,7 +162,7 @@ export function ServerDataWrapper({ children }: { children: React.ReactNode }) {
                                                                     URL.</Text>
                 {Platform.OS === "web" && (
                     <Text className="text-white/45 text-sm text-center">
-                        On a TV, the server also needs a password, and the computer's firewall has to let its port in.
+                        On a TV, the server has to listen on your network, and the computer's firewall has to let its port in.
                     </Text>
                 )}
             </View>

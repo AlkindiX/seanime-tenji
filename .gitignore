@@ -102,9 +102,13 @@ scripts/
 !tools/
 tools/*
 !tools/update-anilist-tags.mjs
+!tools/debug-log-receiver.mjs
 .*/
 !.github/
 .github/*
 !.github/workflows/
 !.github/ISSUE_TEMPLATE/
 latest-version.txt
+
+# npm run debug:logs output
+debug-logs/

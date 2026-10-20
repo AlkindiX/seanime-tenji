@@ -46,12 +46,65 @@ export type MpvVideoSource = {
     chapters?: MpvChapter[]
     /** How the source was chosen, shown with the technical info. */
     mediaInfoSummary?: MpvMediaInfoSummary
-    /** Id of a registered subtitle feed (see `registerSubtitleFeed`) whose tracks fill in during playback. */
-    subtitleFeed?: string
+    /** Subtitle tracks whose lines arrive during playback (Seanime's direct stream reads them from the file as it serves it). */
+    streamedSubtitles?: MpvStreamedSubtitles
+    /** Media element events, for a server that follows playback (Seanime's direct stream). */
+    onMediaEvent?: (event: MpvMediaEvent) => void
     /** Fonts the file carries (MKV attachments), as URLs, for drawing ASS subtitles with libass. */
     subtitleFonts?: string[]
     /** Draw ASS subtitles with libass (default) or as plain text lines; `setAssRendering` changes it later. */
     assRendering?: boolean
+}
+
+export type MpvStreamedSubtitleTrack = {
+    /** The track's own number; lines refer to it. */
+    number: number
+    title?: string
+    lang?: string
+    codec?: string
+    /** ASS header ([Script Info], [V4+ Styles]) for the style alignments. */
+    header?: string
+}
+
+export type MpvStreamedSubtitleLine = {
+    trackNumber: number
+    /** Seconds. */
+    start: number
+    end: number
+    /** ASS dialogue text, override tags included. */
+    text: string
+    style?: string
+    /** The rest of an ASS packet, which libass reads along with the text and style. */
+    ass?: { layer?: string; name?: string; marginL?: string; marginR?: string; marginV?: string; effect?: string }
+    /** An image subtitle (PGS, which the server decodes) instead of text. */
+    image?: MpvSubtitleImage
+}
+
+/** A bitmap subtitle placed on the video's own pixel grid (`canvasWidth` × `canvasHeight`). */
+export type MpvSubtitleImage = {
+    /** A data: URL. */
+    src: string
+    x: number
+    y: number
+    width: number
+    height: number
+    canvasWidth: number
+    canvasHeight: number
+    /** The part of the image shown at (x, y), when the stream crops it. */
+    crop?: { x: number; y: number; width: number; height: number }
+}
+
+export type MpvStreamedSubtitles = {
+    tracks: MpvStreamedSubtitleTrack[]
+    /** Lines seen before subscribing are delivered first. Returns the unsubscribe function. */
+    subscribe: (listener: (lines: MpvStreamedSubtitleLine[]) => void) => () => void
+}
+
+export type MpvMediaEvent = {
+    type: "loadedmetadata" | "seeked" | "pause" | "play" | "ended" | "status"
+    currentTime: number
+    duration: number
+    paused: boolean
 }
 
 export type MpvMediaInfoSummary = {

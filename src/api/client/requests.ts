@@ -58,7 +58,7 @@ function normalizeSeaError(error: unknown): SeaError {
 }
 
 // A server without a password answers 403 to requests from origins it doesn't trust.
-// The webOS app runs from file://, so every request it sends has `Origin: null`.
+// The webOS app runs from file://, so a request that carries an Origin says `null`.
 export function isUntrustedOriginError(error: unknown): boolean {
     if (typeof error !== "object" || error === null) return false
     const { status, error: message } = error as Partial<SeaError>
@@ -142,8 +142,9 @@ export async function buildSeaQuery<T, D = unknown>(
 
     try {
         const response = await fetch(url.toString(), options)
-        markServerReachable()
+        markServerReachable(`${method} ${endpoint} -> ${response.status}`)
         saveClientIdentityFromHeaders(response.headers)
+        log.debug(`${method} ${endpoint} -> ${response.status}`, { durationMs: Date.now() - startedAt })
 
         const text = await response.text()
         let responseData: { data?: T; error?: string } | undefined
@@ -186,7 +187,7 @@ export async function buildSeaQuery<T, D = unknown>(
         const connectivityFailure = isConnectivityFailure(error, seaError)
 
         if (connectivityFailure) {
-            markServerUnreachable()
+            markServerUnreachable(`${method} ${endpoint} failed: ${seaError.error}`)
         }
 
         log.warning(`${method} ${endpoint} failed`, {
