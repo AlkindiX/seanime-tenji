@@ -121,9 +121,9 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   not done.
 - **Leaving the player.** Back leaves at once, without asking: playback pauses, the player
   fades out (160 ms, opacity and scale with the Web Animations API) and the page underneath
-  eases in. Back still closes an open panel or dialog first, then the controls. Stop and the
-  controls' exit button leave the same way. The position goes to the server's watch history
-  before the player closes.
+  eases in. Back still closes an open panel or dialog first, then the controls. The controls'
+  exit button leaves the same way; the remote's Stop key leaves and also ends the stream. The
+  position goes to the server's watch history before the player closes.
 - **Torrent and debrid streams keep running** after you leave the player, in case Back was
   pressed by accident. The server goes on downloading the episode's file (it marks the whole
   file for download) and Tenji keeps the subtitle lines it sends meanwhile. Playing that
@@ -135,8 +135,12 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   afresh as usual.
   - The kept stream ends when another episode or video starts (torrent, debrid, library file
     or online stream), with *Stop* on that card, when the episode played to the end or the
-    player failed, after 30 minutes nobody watched it, and when the app closes (sent as the
-    page unloads, so not guaranteed). Stopping the stream on the server ends it too.
+    player failed, after 30 minutes nobody watched it, when the app is hidden (Home, another
+    app, standby: a suspended TV runs no timers) and when it closes (sent as the page
+    unloads, so not guaranteed). Stopping the stream on the server ends it too, and so does
+    connecting to another server. Without a websocket at that moment (e.g. right after
+    standby), the stream is stopped over HTTP instead (`/api/v1/torrentstream/stop` or
+    `/api/v1/debrid/stream/cancel`).
   - Picking it up again tells the server the player is back (`video-loaded`) and reports a
     seek to where it starts: the server sends each subtitle line only once and ignores a
     second `video-loaded-metadata` after a seek, so the seek makes it read the subtitles again
@@ -270,7 +274,7 @@ The arrow keys, OK and Back work as on Android TV. LG remotes also have these ke
 | Yellow | Skip the intro or outro when the button is offered, otherwise show the controls | |
 | Blue | Settings | |
 | Info | Show or hide playback stats | |
-| Stop | Leave the player, as Back does (a stream keeps running; see Playback) | |
+| Stop | Leave the player and end the stream (Back keeps it running; see Playback) | |
 | CH+ / CH- | Next / previous episode (asks first when much of the episode is left) | Page up / down through a list or grid |
 | 0 to 9 | Jump to 0 %, 10 % … 90 % of the episode | Type into a text field |
 | Play, Pause, ⏩, ⏪ | Play, pause, seek | |

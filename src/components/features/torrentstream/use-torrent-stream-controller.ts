@@ -38,6 +38,7 @@ import { logger } from "@/lib/utils/logger"
 import { toast } from "@/lib/utils/toast"
 import { useAtom } from "jotai"
 import { useAtomValue, useSetAtom } from "jotai/react"
+import { useFocusEffect } from "expo-router"
 import * as React from "react"
 import { Platform } from "react-native"
 import {
@@ -439,6 +440,14 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
 
     const openKeptStream = useOpenKeptStream()
     const resumingRef = React.useRef(false)
+    /** Bumped when the screen goes away or another stream starts: a pending resume check is then dropped. */
+    const resumeTokenRef = React.useRef(0)
+    const cancelResume = React.useCallback(() => {
+        resumeTokenRef.current++
+        resumingRef.current = false
+    }, [])
+    React.useEffect(() => cancelResume, [cancelResume])
+    useFocusEffect(React.useCallback(() => cancelResume, [cancelResume]))
 
     /**
      * webOS: the stream the player left for this episode still runs on the
@@ -451,10 +460,16 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
         if (!kept) return false
         if (resumingRef.current) return true
         resumingRef.current = true
+        const token = ++resumeTokenRef.current
         void probeKeptStream(kept).then((probe) => {
+            // The user left the screen or started something else meanwhile.
+            if (token !== resumeTokenRef.current) return
             resumingRef.current = false
-            // Another episode may have started meanwhile, which ends the kept stream.
-            if (findKeptStream(kept.mediaId, kept.episodeNumber)?.playbackId !== kept.playbackId) return
+            // The server ended the kept stream meanwhile: start the episode as usual.
+            if (findKeptStream(kept.mediaId, kept.episodeNumber)?.playbackId !== kept.playbackId) {
+                startFresh()
+                return
+            }
             if (probe === "gone") {
                 log.info("The kept stream ended on the server; starting the episode again", { mediaId, episodeNumber })
                 endKeptStream("forget", kept.playbackId)
@@ -469,6 +484,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
     const startAutoSelectedStream = React.useCallback((episode: Anime_Episode, mode: StreamMode = streamMode) => {
         if (!episode.aniDBEpisode || !mediaId || !ensureLiveConnection()) return
         // A new stream replaces the one the player left (webOS); end it first.
+        cancelResume()
         endKeptStream("terminate")
         episodeSelectionLockedRef.current = true
         log.info(`Starting ${mode} stream`, {
@@ -569,6 +585,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
         launchMode?: StreamEpisodeLaunchMode
     }, mode: StreamMode = streamMode) => {
         if (!params.episode.aniDBEpisode || !mediaId || !ensureLiveConnection()) return
+        cancelResume()
         endKeptStream("terminate")
         episodeSelectionLockedRef.current = true
         log.info(`Starting ${mode} stream`, {

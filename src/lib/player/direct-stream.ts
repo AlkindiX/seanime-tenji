@@ -1,5 +1,7 @@
 import { getClientIdentity } from "@/api/client/client-identity"
+import { buildSeaQuery } from "@/api/client/requests"
 import { sendWsMessage, subscribeWsMessage } from "@/api/components/websocket-hub"
+import { API_ENDPOINTS } from "@/api/generated/endpoints"
 import type { MKVParser_Metadata, NativePlayer_PlaybackInfo } from "@/api/generated/types"
 import { logger } from "@/lib/utils/logger"
 import type { MpvChapter, MpvMediaEvent, MpvStreamedSubtitleLine, MpvStreamedSubtitles } from "expo-mpv-player"
@@ -68,12 +70,32 @@ const MEDIA_EVENTS: Record<MpvMediaEvent["type"], string> = {
  * it also clears the server's player state for this client, which by then
  * may belong to a newer stream.
  */
-export function terminateDirectStream(playbackId: string, playbackType: string) {
+export function terminateDirectStream(playbackId: string, playbackType: string): boolean {
     const { clientId } = getClientIdentity()
-    sendWsMessage({
+    return sendWsMessage({
         type: VIDEOCORE_EVENT,
         payload: { clientId, type: "video-terminated", payload: { id: playbackId, clientId, playerType: "native", playbackType } },
     })
+}
+
+/**
+ * With no websocket to say "video-terminated" on (a TV waking from standby
+ * before it reconnects), the stream is stopped over HTTP instead, or the
+ * server would keep downloading the torrent until another stream starts.
+ */
+function stopStreamOverHttp(source: MobilePlaybackSource, playbackType: string) {
+    const apiIndex = source.url.indexOf("/api/v1/")
+    if (apiIndex < 0) return
+    const debrid = playbackType === "debrid"
+    const endpoint = debrid ? API_ENDPOINTS.DEBRID.DebridCancelStream : API_ENDPOINTS.TORRENTSTREAM.TorrentstreamStopStream
+    log.info("No websocket; stopping the stream over HTTP", { playbackType })
+    void buildSeaQuery({
+        serverUrl: source.url.slice(0, apiIndex),
+        endpoint: endpoint.endpoint,
+        method: endpoint.methods[0],
+        data: debrid ? {} : undefined,
+        muteError: true,
+    }).catch(error => log.warning("Could not stop the stream over HTTP", error))
 }
 
 export type DirectStreamSession = {
@@ -213,7 +235,7 @@ export function createDirectStreamSession(source: MobilePlaybackSource): DirectS
         terminate: () => {
             if (terminated) return
             stop()
-            terminateDirectStream(playbackId, playbackType)
+            if (!terminateDirectStream(playbackId, playbackType)) stopStreamOverHttp(source, playbackType)
         },
         forget: () => {
             if (terminated) return

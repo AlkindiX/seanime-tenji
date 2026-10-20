@@ -110,4 +110,11 @@ if (Platform.OS === "web" && typeof window !== "undefined") {
     }
     window.addEventListener("pagehide", endOnExit)
     window.addEventListener("beforeunload", endOnExit)
+    // Home, another app or standby hide the app without unloading it, and a
+    // suspended TV runs no idle timer. A stream nobody is watching ends while
+    // the websocket is still up; one a player shows is left alone.
+    document.addEventListener("visibilitychange", () => {
+        const kept = keptDirectStreams.current()
+        if (document.visibilityState === "hidden" && kept && kept.leftAt !== null) endKeptStream("terminate", kept.playbackId)
+    })
 }

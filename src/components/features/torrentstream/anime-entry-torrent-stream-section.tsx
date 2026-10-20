@@ -75,6 +75,10 @@ export function AnimeEntryTorrentStreamSection({ entry, resumeRef }: AnimeEntryT
         // Ends the server's stream (as leaving the player used to), then clears what the app shows of it.
         endKeptStream("terminate")
         torrentStream.stopCurrentStream()
+        // The focused Stop button goes with the Resume card at once, while the
+        // server's last status events can keep the "stream active" card up a
+        // moment longer: give focus to Play now rather than to a removed node.
+        if (Platform.isTV) requestAnimationFrame(() => requestTVFocus(playRef.current))
     }, [torrentStream.stopCurrentStream])
 
     React.useEffect(() => {

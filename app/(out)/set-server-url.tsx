@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader } from "@/co
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { IMAGES } from "@/constants/images"
+import { endKeptStream } from "@/lib/player/kept-direct-stream"
 import { logger } from "@/lib/utils/logger"
 import { toast } from "@/lib/utils/toast"
 import { useQueryClient } from "@tanstack/react-query"
@@ -78,6 +79,8 @@ export default function Screen() {
                     bypassOfflineCheck: true,
                 })
 
+                // A stream kept from the old server (webOS) can't be resumed from the new one
+                endKeptStream("terminate")
                 await setServerStatus(null)
                 // the persisted status query too, or the app starts from the old server's answer
                 queryClient.removeQueries({ queryKey: [API_ENDPOINTS.STATUS.GetStatus.key] })

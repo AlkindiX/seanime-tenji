@@ -793,32 +793,39 @@ function PlayerScreenInner() {
     // keeps running on the server, so playing the episode again resumes it.
     const exitViewRef = React.useRef<React.ComponentRef<typeof View>>(null)
     const leavingRef = React.useRef(false)
-    const leavePlayer = React.useCallback(() => {
+    /** `endStream`: the remote's Stop key, which ends the stream instead of keeping it. */
+    const leavePlayer = React.useCallback((endStream = false) => {
         if (leavingRef.current) return
+        const leave = () => {
+            if (endStream && source?.directStreamPlaybackId) endKeptStream("terminate", source.directStreamPlaybackId)
+            handleBack()
+        }
         // Nowhere to go back to: fading out would leave a blank screen.
         if (!canGoBack()) {
-            handleBack()
+            leave()
             return
         }
         leavingRef.current = true
         controls.clearHideTimer()
         // Silent at once; the page then fades out before Back.
         player.pause()
-        void playPlayerExit(exitViewRef.current).then(handleBack)
-    }, [canGoBack, controls.clearHideTimer, handleBack, player.pause])
+        void playPlayerExit(exitViewRef.current).then(leave)
+    }, [canGoBack, controls.clearHideTimer, handleBack, player.pause, source?.directStreamPlaybackId])
 
     // The error and loading screens replace the player and its dialogs.
     const showsBareScreen = !!error || (!!loadingMessage && !source)
 
     // A Magic Remote click on the video (not on a control) plays and pauses.
     usePointerClick(() => {
+        // Input during the exit fade would restart playback or move the saved position.
+        if (leavingRef.current) return
         if (!Platform.isTV || showsBareScreen || panel || nextEpisodePrompt || showExitPrompt) return
         if (autoNext.autoNextCountdown !== null || state.isPiPActive) return
         toggleFromWheel()
     })
 
     useTVEventHandler((event) => {
-        if (!Platform.isTV || !event) return
+        if (!Platform.isTV || !event || leavingRef.current) return
         if (event.eventType === "menu") return
 
         if (showsBareScreen) {
@@ -1211,8 +1218,8 @@ function PlayerScreenInner() {
             case "stop":
                 setPanel(null)
                 controls.clearHideTimer()
-                // webOS leaves like Back (the stream keeps running); elsewhere it asks first.
-                if (Platform.OS === "web") leavePlayer()
+                // webOS leaves at once and ends the stream (Back keeps it); elsewhere it asks first.
+                if (Platform.OS === "web") leavePlayer(true)
                 else setShowExitPrompt(true)
                 return true
         }
