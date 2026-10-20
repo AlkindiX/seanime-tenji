@@ -2,6 +2,7 @@ import type { AL_BaseAnime } from "@/api/generated/types"
 import { getEpisodeMinutesRemaining, getEpisodePercentageComplete, useGetContinuityWatchHistory } from "@/api/hooks/continuity.hooks"
 import { animeEntryPlaybackIntentAtom, createAnimeEntryPlaybackIntent } from "@/atoms/anime-entry.atoms"
 import { useServerStatus } from "@/atoms/server.atoms"
+import { useDiscoverTrendingAnime } from "@/components/features/discover/discover-queries"
 import {
     EPISODE_ROW_LAYOUT,
     ROW_OVERFLOW,
@@ -16,6 +17,14 @@ import {
     TVShelf,
     tvSize,
 } from "@/components/tv"
+import { trendingHeroItem } from "@/components/tv/tv-hero-items"
+import {
+    type HomeTrendingItem,
+    homeTrendingSkipIds,
+    pickHomeTrending,
+    pickTrendingHeroItems,
+    trendingShelfIndex,
+} from "@/components/tv/tv-home-feed"
 import { TVNavScrim } from "@/components/tv/tv-nav-scrim"
 import type { TVMediaMeta } from "@/components/tv/tv-shelf"
 import { ContinueWatchingItem, useAnimeLibraryCollection } from "@/hooks/use-anime-library-collection"
@@ -38,8 +47,11 @@ type Shelf = {
     metaById?: ReadonlyMap<number, TVMediaMeta>
     hideLibraryBadge?: boolean
     hideProgress?: boolean
+    showAudienceScore?: boolean
     onMediaPress?: (media: AL_BaseAnime) => void
 }
+
+const NO_TRENDING: HomeTrendingItem<AL_BaseAnime>[] = []
 
 const LABELS: Record<string, string> = {
     CURRENT: "Currently watching",
@@ -77,6 +89,25 @@ export function TVLibraryScreen() {
         refetch,
         hasNonLocalEpisodes,
     } = useAnimeLibraryCollection()
+
+    // webOS: the start screen also shows what is trending on AniList, after the
+    // shows to continue. Same query as Discover's (no genre), so they share one result.
+    // It runs on every launch: when AniList fails, the trending slides and row are
+    // just left out, without an error toast.
+    const showTrending = Platform.OS === "web" && isConnected
+    const trending = useDiscoverTrendingAnime(showTrending, undefined, { muteError: true })
+    const hideScore = serverStatus?.settings?.anilist?.hideAudienceScore ?? false
+    const trendingItems = React.useMemo(() => {
+        if (!showTrending) return NO_TRENDING
+        const continueIds = continueWatchingList
+            .map(item => item.episode.baseAnime?.id)
+            .filter((id): id is number => typeof id === "number")
+        return pickHomeTrending(
+            trending.data?.Page?.media as (AL_BaseAnime | null)[] | undefined,
+            homeTrendingSkipIds(continueIds, libraryCollectionList),
+        )
+    }, [continueWatchingList, libraryCollectionList, showTrending, trending.data?.Page?.media])
+    const trendingMedia = React.useMemo(() => trendingItems.map(item => item.media), [trendingItems])
 
     const allEntries = React.useMemo(() => libraryCollectionList.flatMap(list => list?.entries ?? []), [libraryCollectionList])
     const searchMedia = React.useMemo(() => {
@@ -148,8 +179,17 @@ export function TVLibraryScreen() {
             })
         }
 
+        if (trendingMedia.length > 0) {
+            items.splice(trendingShelfIndex(items.map(shelf => shelf.key)), 0, {
+                key: "trending",
+                title: "Trending now",
+                media: trendingMedia,
+                showAudienceScore: true,
+            })
+        }
+
         return items
-    }, [hasNonLocalEpisodes, libraryCollectionList, localRecords])
+    }, [hasNonLocalEpisodes, libraryCollectionList, localRecords, trendingMedia])
 
     const openMedia = React.useCallback((id: number) => {
         router.push(`/(app)/entry/anime/${id}`)
@@ -180,7 +220,7 @@ export function TVLibraryScreen() {
     const heroItems = React.useMemo<TVHeroItem[]>(() => {
         const spoilerActive = getContinueWatchingSpoilerActive(serverStatus)
 
-        return continueWatchingList
+        const continueItems = continueWatchingList
             .filter(item => !!item.episode.baseAnime)
             .slice(0, 12)
             .map(item => {
@@ -219,7 +259,17 @@ export function TVLibraryScreen() {
                     onSecondary: () => openMedia(media.id),
                 }
             })
-    }, [continueWatchingList, openContinue, openMedia, serverStatus, watchHistory])
+
+        // Trending fills the hero after the shows to continue (none off webOS).
+        const trendingSlides = pickTrendingHeroItems(trendingItems, continueItems.length)
+            .map(item => trendingHeroItem(item.media, {
+                hideScore,
+                subtitle: `#${item.rank} trending on AniList`,
+            }))
+
+        return trendingSlides.length > 0 ? [...continueItems, ...trendingSlides] : continueItems
+    }, [continueWatchingList, hideScore, openContinue, openMedia, serverStatus, trendingItems, watchHistory])
+    const heroLoading = isLoading || (showTrending && continueWatchingList.length === 0 && trending.isLoading)
 
     const renderContinue = React.useCallback(({ item, index }: { item: ContinueWatchingItem; index: number }) => (
         <TVContinueCard
@@ -237,6 +287,11 @@ export function TVLibraryScreen() {
     }
 
     if (!shelves.length && !continueWatchingList.length && !searching) {
+        // webOS: trending is still loading and will fill the screen.
+        if (showTrending && trending.isLoading) {
+            return <TVPageSkeleton hero />
+        }
+
         return (
             <ScrollView style={{ flex: 1, backgroundColor: "#0a0a0a" }}>
                 <View
@@ -318,10 +373,10 @@ export function TVLibraryScreen() {
                     <View style={{ gap: tvSize(34), paddingBottom: tvSize(8) }}>
                         <View
                             style={{
-                                minHeight: heroItems.length > 0 || isLoading ? tvSize(560) : tvSize(32),
+                                minHeight: heroItems.length > 0 || heroLoading ? tvSize(560) : tvSize(32),
                             }}
                         >
-                            <TVHeroCarousel items={heroItems} active={isFocused} preferred loading={isLoading} />
+                            <TVHeroCarousel items={heroItems} active={isFocused} preferred loading={heroLoading} />
                         </View>
 
                         {continueWatchingList.length > 0 ? (
@@ -368,6 +423,7 @@ export function TVLibraryScreen() {
                             metaById={shelf.metaById}
                             hideLibraryBadge={shelf.hideLibraryBadge}
                             hideProgress={shelf.hideProgress}
+                            showAudienceScore={shelf.showAudienceScore}
                             onMediaPress={shelf.onMediaPress}
                             first={heroItems.length === 0 && index === 0}
                         />

@@ -13,8 +13,8 @@ import {
 } from "@/components/features/discover/discover-queries"
 import { OfflineBanner } from "@/components/shared/offline-banner"
 import { TV, TVButton, TVHeroCarousel, type TVHeroItem, TVPageSkeleton, TVPillButton, TVShelf, tvSize } from "@/components/tv"
+import { trendingHeroItem } from "@/components/tv/tv-hero-items"
 import { TVNavScrim } from "@/components/tv/tv-nav-scrim"
-import { cleanHtml, mediaTitle } from "@/lib/media-metadata"
 import { useIsServerConnected } from "@/lib/offline"
 import { SEARCH_MEDIA_GENRES } from "@/lib/search/search-constants"
 import Ionicons from "@expo/vector-icons/Ionicons"
@@ -56,23 +56,7 @@ export function TVDiscoverScreen() {
         trendingMedia
             .filter(media => !!media.bannerImage)
             .slice(0, 12)
-            .map(media => ({
-                key: String(media.id),
-                image: media.bannerImage
-                    ?? media.coverImage?.extraLarge
-                    ?? media.coverImage?.large,
-                kicker: "Trending right now",
-                title: mediaTitle(media),
-                meta: [
-                    media.seasonYear,
-                    media.format?.replaceAll("_", " "),
-                    media.genres?.slice(0, 3).join("  ·  "),
-                ].filter(Boolean).join("  ·  "),
-                description: cleanHtml(media.description),
-                score: hideScore ? undefined : media.meanScore,
-                actionLabel: "Open anime",
-                onAction: () => router.push(`/(app)/entry/anime/${media.id}`),
-            }))
+            .map(media => trendingHeroItem(media, { hideScore }))
     ), [hideScore, trendingMedia])
 
     const shelves = React.useMemo<Shelf[]>(() => [

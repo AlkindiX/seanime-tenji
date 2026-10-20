@@ -74,6 +74,35 @@ so give every new focusable an `accessibilityLabel`, especially icon-only ones. 
 with an icon font would otherwise be read as part of the name. The labels have been checked
 in desktop Chromium, not yet with the TV's speech.
 
+## Start screen
+
+Tenji opens on the Anime tab. On webOS it shows what to watch next and what is popular
+before the library lists:
+
+- **The hero** (the large slides at the top) starts with the shows to continue watching,
+  as on Android TV, then shows the anime trending on AniList right now ("#3 trending on
+  AniList"), until it has 8 slides. With nothing to continue, trending fills it; with 8
+  or more shows to continue, it is all continue watching. Trending shows already in
+  continue watching or in *Currently watching* are left out, and only those with a banner
+  image become slides. When trending arrives after the slides to continue (or a refresh
+  reorders them), the hero stays on the slide it is showing.
+- **A "Trending now" row** sits right after *Currently watching* (or first, without
+  that row). Its cards open the show, as on Discover.
+- With an empty library, the trending slides and row are shown instead of "Your anime
+  library is empty".
+
+Trending is the same AniList query as Discover's first row (fetched through the server),
+so the two screens share one result. If AniList fails, the start screen just leaves the
+trending slides and row out, without an error message on every launch. Android TV and
+tvOS keep their start screen as it was.
+
+**Why not the TV's home screen.** According to LG's developer documentation and LG staff
+on its developer forum, the cards LG shows above an app's tile on the home screen (the
+*Preview Area*), LG's home search and content recommendations are only for LG's contracted
+content partners, and toasts and alerts only for system apps. Tenji doesn't try them, so
+trending and continue-watching shows are on its own start screen instead. This has not been
+tested on the C3 (see Not yet verified).
+
 ## Playback
 
 The built-in player is the TV's HTML5 video engine, not libmpv.
@@ -316,6 +345,8 @@ are released, so a long seek doesn't continue when you come back.
   another machine; and that large server messages pass over the bus. LG documents no size
   limit for Luna messages. LG's ACG guide doesn't say whether webOS 26 checks an app's
   calls to its own service; a refused call counts as a missing service.
+- Whether a sideloaded app really can't show a toast or put cards on the home screen of
+  the C3. That is what LG's docs and staff say (see Start screen); it was not tried.
 
 ## Debug logs
 
