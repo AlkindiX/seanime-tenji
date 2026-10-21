@@ -276,7 +276,7 @@ function useDirectStreamSession(source: MobilePlaybackSource | null) {
         setCurrent({ id, session })
         return () => {
             if (session.ended()) endKeptStream("terminate", playbackId)
-            else keptDirectStreams.leave(playbackId, session.position())
+            else if (keptDirectStreams.leave(playbackId, session.position())) session.release()
         }
     }, [id])
 

@@ -69,7 +69,12 @@ export function useKeptStream(mediaId?: number): KeptDirectStream | null {
  * its own when another client starts a stream, when it restarts, or when the
  * torrent is stopped from elsewhere. A HEAD request reads no video.
  */
-export async function probeKeptStream(kept: KeptDirectStream): Promise<KeptStreamProbe> {
+export function probeKeptStream(kept: KeptDirectStream): Promise<KeptStreamProbe> {
+    return probeStreamUrl(kept.source.url)
+}
+
+/** Whether the server still serves the direct stream at `url` (see probeKeptStream). */
+export async function probeStreamUrl(url: string): Promise<KeptStreamProbe> {
     const controller = typeof AbortController === "function" ? new AbortController() : null
     let timedOut = false
     const timer = setTimeout(() => {
@@ -77,7 +82,7 @@ export async function probeKeptStream(kept: KeptDirectStream): Promise<KeptStrea
         controller?.abort()
     }, PROBE_TIMEOUT_MS)
     try {
-        const response = await fetch(kept.source.url, {
+        const response = await fetch(url, {
             method: "HEAD",
             headers: getServerAuthHeaders(),
             cache: "no-store",
@@ -91,7 +96,7 @@ export async function probeKeptStream(kept: KeptDirectStream): Promise<KeptStrea
         log.warning("Could not ask the server about the kept stream", error)
         // CORS can hide the answer of a server that is up; a no-cors request only fails when it is not.
         try {
-            await fetch(kept.source.url, { method: "HEAD", mode: "no-cors", cache: "no-store", signal: controller?.signal })
+            await fetch(url, { method: "HEAD", mode: "no-cors", cache: "no-store", signal: controller?.signal })
             return classifyKeptStreamProbe("no-answer")
         } catch {
             return classifyKeptStreamProbe(timedOut ? "no-answer" : "unreachable")

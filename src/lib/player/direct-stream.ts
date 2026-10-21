@@ -7,6 +7,7 @@ import { logger } from "@/lib/utils/logger"
 import type { MpvChapter, MpvMediaEvent, MpvStreamedSubtitleLine, MpvStreamedSubtitles } from "expo-mpv-player"
 import { Platform } from "react-native"
 import { eventsOf, toLines } from "./direct-stream-format"
+import { probeStreamUrl } from "./kept-direct-stream"
 import type { MobilePlaybackSource } from "./types"
 
 export { describeStreamCodecs, type StreamCodecs } from "./direct-stream-format"
@@ -82,10 +83,17 @@ export function terminateDirectStream(playbackId: string, playbackType: string):
  * With no websocket to say "video-terminated" on (a TV waking from standby
  * before it reconnects), the stream is stopped over HTTP instead, or the
  * server would keep downloading the torrent until another stream starts.
+ * That request stops whatever the server streams, so it only goes out while
+ * the server still serves this playback: a TV that slept through another
+ * device starting a stream would stop that one.
  */
-function stopStreamOverHttp(source: MobilePlaybackSource, playbackType: string) {
+async function stopStreamOverHttp(source: MobilePlaybackSource, playbackType: string) {
     const apiIndex = source.url.indexOf("/api/v1/")
     if (apiIndex < 0) return
+    if (await probeStreamUrl(source.url) !== "alive") {
+        log.info("Not stopping over HTTP: the server no longer serves this stream", { playbackType })
+        return
+    }
     const debrid = playbackType === "debrid"
     const endpoint = debrid ? API_ENDPOINTS.DEBRID.DebridCancelStream : API_ENDPOINTS.TORRENTSTREAM.TorrentstreamStopStream
     log.info("No websocket; stopping the stream over HTTP", { playbackType })
@@ -112,6 +120,13 @@ export type DirectStreamSession = {
      * the subtitles again from where the new player starts.
      */
     reattach: () => void
+    /**
+     * The player closed but the stream keeps running (webOS): gives up the
+     * server's player slot. The server follows one player and ignores every
+     * other device while that one stays connected, so a phone or another TV
+     * would get no subtitles and no progress while this TV shows a menu.
+     */
+    release: () => void
     /** Tells the server the player is gone, which ends the stream. */
     terminate: () => void
     /** Stops following the stream without telling the server, which already ended it. */
@@ -232,10 +247,19 @@ export function createDirectStreamSession(source: MobilePlaybackSource): DirectS
             resyncSubtitles = true
             reportLoaded()
         },
+        release: () => {
+            if (terminated || !loaded) return
+            loaded = false
+            // "video-terminated" for a playback that isn't this one: VideoCore
+            // frees its player slot whatever the ID, while the direct stream and
+            // mediacore drop a termination of another playback (Seanime 3.10.4),
+            // so the stream keeps running.
+            send("video-terminated", { id: `${playbackId}:left`, clientId, playerType: "native", playbackType })
+        },
         terminate: () => {
             if (terminated) return
             stop()
-            if (!terminateDirectStream(playbackId, playbackType)) stopStreamOverHttp(source, playbackType)
+            if (!terminateDirectStream(playbackId, playbackType)) void stopStreamOverHttp(source, playbackType)
         },
         forget: () => {
             if (terminated) return

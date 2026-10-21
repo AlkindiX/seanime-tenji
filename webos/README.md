@@ -140,7 +140,16 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
     unloads, so not guaranteed). Stopping the stream on the server ends it too, and so does
     connecting to another server. Without a websocket at that moment (e.g. right after
     standby), the stream is stopped over HTTP instead (`/api/v1/torrentstream/stop` or
-    `/api/v1/debrid/stream/cancel`).
+    `/api/v1/debrid/stream/cancel`), but only after a HEAD request shows the server still
+    serves it: that request stops whatever the server streams, and a TV that slept through
+    another device starting a stream would otherwise stop that one.
+  - Leaving the player gives up the server's player slot while the stream runs on. The
+    server follows one player at a time and ignores every other device's player while that
+    one stays connected, so a phone or browser playing meanwhile got no subtitles and no
+    progress. Tenji sends `video-terminated` for a playback ID that isn't the stream's:
+    VideoCore clears its player whatever the ID, while the direct stream and mediacore drop
+    a termination of another playback, so the stream keeps running (Seanime 3.10.4; checked
+    with two clients on a throwaway server).
   - Picking it up again tells the server the player is back (`video-loaded`) and reports a
     seek to where it starts: the server sends each subtitle line only once and ignores a
     second `video-loaded-metadata` after a seek, so the seek makes it read the subtitles again
@@ -334,10 +343,12 @@ are released, so a long seek doesn't continue when you come back.
   build makes it a classic script, so webOS 6 may run it too.
 - PGS placement was checked with a test image, not a real Blu-ray track.
 - Leaving the player and resuming a kept stream: checked by typecheck, unit tests of the
-  bookkeeping and the Seanime 3.10.4 server source, not yet against a server or on a TV.
-  Still to see on a TV: whether the exit fade also fades the video (webOS may draw video on
-  its own plane, in which case the paused frame stays until the player closes), how long
-  resuming takes, and whether the stream ends when the app is closed.
+  bookkeeping, the Seanime 3.10.4 server source, and against a real server in desktop
+  Chromium (leaving keeps the stream, resuming brings the subtitles back, another device's
+  player is heard after Back). Still to see on a TV: whether the exit fade also fades the
+  video (webOS may draw video on its own plane, in which case the paused frame stays until
+  the player closes), how long resuming takes, and whether the stream ends when the app is
+  closed.
 - The relay service on a TV (see Live connection). The relay was tested against a local `ws`
   server, the app's side through a stand-in `PalmServiceBridge`, and the built bundle with a
   stand-in `webos-service`, all in Node 22. Still to check on a TV: that Developer Mode and
