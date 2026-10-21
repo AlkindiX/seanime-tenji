@@ -110,9 +110,23 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   session (a file the TV can't play at all doesn't count against it). *Not verified on
   a TV*: desktop Chromium plays the `<source>` but ignores the option, so the checks covered
   passing the position, the seek that follows and the fallback, not the speed-up.
-- **Audio tracks** can be switched when the TV exposes them, which webOS does.
-- **Subtitles** are drawn by the app: SRT, WebVTT and ASS dialogue lines. ASS styling and
-  positioned typesetting (signs) are not rendered.
+- **Audio tracks** can be switched when the TV exposes them, which webOS does (since
+  webOS 3).
+- **Subtitles** are drawn by the app.
+  - **ASS/SSA** are drawn by libass, as mpv does on the other builds: fonts (the ones the
+    file carries, from the server), styling, signs, positioning and animation. libass runs
+    in WebAssembly ([JASSUB](https://github.com/ThaUnknown/jassub)) in a worker, drawing
+    on a canvas over the video. *Subtitle styling* under Audio & subtitles switches to
+    plain text lines instead (what's left of the dialogue, without signs), which is also
+    used when libass can't start on a TV.
+  - JASSUB draws when the browser reports a presented video frame
+    (`requestVideoFrameCallback`). webOS shows the video on its own hardware plane and
+    never reports one (seen on an LG C3, WebAppManager with Chrome 132), so libass got
+    every line and drew none, on a canvas left at 300x150. While no frames are reported,
+    the video's clock drives JASSUB instead (`manualRender`): about 30 times a second
+    while it plays, and once after a seek, a pause, a track change or new lines. libass
+    skips frames whose picture didn't change.
+  - **SRT and WebVTT** are drawn as text in the subtitle size you pick.
   - For library files, embedded tracks are extracted by the server. This needs its
     media streaming module and FFmpeg on the server.
   - Embedded subtitles in torrent and debrid streams are not available.
@@ -183,6 +197,11 @@ are released, so a long seek doesn't continue when you come back.
   authenticated) were checked but not its picture.
 - The real answers of the Luna calls on each webOS version, and ACG enforcement on webOS 26.
 - Whether `mediaOption` resumes faster on a TV (see Resuming).
+- libass on a TV: draws ASS subtitles and signs on an LG C3 (webOS with Chrome 132,
+  installed from `file://`) since the video's clock drives it. Still to see: its speed with
+  heavy typesetting. If it fails, subtitles fall back to plain text. JASSUB's worker needs Chromium 80 for `type: "module"`; the
+  build makes it a classic script, so webOS 6 may run it too.
+- PGS placement was checked with a test image, not a real Blu-ray track.
 
 ## Developing
 
