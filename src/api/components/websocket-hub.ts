@@ -43,3 +43,19 @@ export function publishWsMessage(message: WebsocketMessage) {
         }
     }
 }
+
+type WebsocketSender = (message: WebsocketMessage) => void
+
+let sender: WebsocketSender | null = null
+
+/** Set by the WebSocket provider while its socket is open. */
+export function setWsSender(next: WebsocketSender | null) {
+    sender = next
+}
+
+/** Sends a message to the server; false when the socket is not open. */
+export function sendWsMessage(message: WebsocketMessage): boolean {
+    if (!sender) return false
+    sender(message)
+    return true
+}

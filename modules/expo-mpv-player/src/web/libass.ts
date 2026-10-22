@@ -15,11 +15,14 @@ type JassubRenderer = {
     processChunk: (data: string, timecode: number, duration: number) => Promise<void>
 }
 
+type JassubFrame = { mediaTime: number; width: number; height: number; expectedDisplayTime: number }
+
 type JassubInstance = {
     ready: Promise<void>
     renderer: JassubRenderer
     timeOffset: number
     _worker: Worker
+    manualRender: (frame: JassubFrame, repaint?: boolean) => Promise<void>
     destroy: () => Promise<void>
 }
 
@@ -42,6 +45,10 @@ export type AssChunk = { data: string; start: number; duration: number }
 const EMPTY_SCRIPT = "[Script Info]\nScriptType: v4.00+\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
 const DEFAULT_FONT = "liberation sans"
 const READY_TIMEOUT_MS = 15_000
+/** How often the video's clock draws while it plays (about 30 times a second). */
+const CLOCK_FRAME_MS = 33
+/** Frames reported this recently mean JASSUB draws on its own. */
+const FRAME_REPORT_FRESH_MS = 250
 
 function assetUrl(name: string) {
     // file://: the document stays at index.html (see webos/install.ts); http: routes are paths, so go from the root.
@@ -109,7 +116,71 @@ export function supportsLibass() {
         && "transferControlToOffscreen" in HTMLCanvasElement.prototype
 }
 
+/**
+ * JASSUB draws, and sizes its canvas to the picture, when the video presents
+ * a frame, as requestVideoFrameCallback reports it. webOS shows the video on
+ * its own hardware plane and never reports a frame, so it drew nothing (the
+ * subtitle lines all arrived) and its canvas kept the default 300x150. While
+ * no frames are reported, the video's clock drives it instead: about 30
+ * times a second while playing, and once after a seek, a pause or a change.
+ */
+function driveFromVideoClock(video: HTMLVideoElement, instance: JassubInstance) {
+    let stopped = false
+    let timer: ReturnType<typeof setInterval> | null = null
+    let lastTime = -1
+    let lastFrameReport = 0
+
+    const draw = (repaint: boolean) => {
+        if (stopped || !video.videoWidth || !video.videoHeight) return
+        if (!repaint && (video.currentTime === lastTime || performance.now() - lastFrameReport < FRAME_REPORT_FRESH_MS)) return
+        lastTime = video.currentTime
+        instance.manualRender({
+            mediaTime: video.currentTime,
+            width: video.videoWidth,
+            height: video.videoHeight,
+            expectedDisplayTime: performance.now(),
+        }, repaint).catch(() => undefined)
+    }
+    const stopTimer = () => {
+        if (timer !== null) clearInterval(timer)
+        timer = null
+    }
+    const onPlaying = () => {
+        timer ??= setInterval(() => draw(false), CLOCK_FRAME_MS)
+    }
+    const onPause = () => {
+        stopTimer()
+        draw(true)
+    }
+    const onChange = () => draw(true)
+
+    // Where frames are reported (desktop browsers), JASSUB keeps drawing on its own.
+    const watchFrames = () => {
+        lastFrameReport = performance.now()
+        if (!stopped) video.requestVideoFrameCallback(watchFrames)
+    }
+    if (typeof video.requestVideoFrameCallback === "function") video.requestVideoFrameCallback(watchFrames)
+
+    const events: [string, () => void][] = [
+        ["playing", onPlaying], ["pause", onPause], ["seeked", onChange], ["resize", onChange], ["loadeddata", onChange],
+    ]
+    for (const [type, listener] of events) video.addEventListener(type, listener)
+    if (!video.paused) onPlaying()
+    draw(true)
+
+    return {
+        redraw: () => draw(true),
+        stop: () => {
+            stopped = true
+            stopTimer()
+            for (const [type, listener] of events) video.removeEventListener(type, listener)
+        },
+    }
+}
+
 export class LibassRenderer {
+    private clock: ReturnType<typeof driveFromVideoClock> | null = null
+
     private constructor(
         private readonly instance: JassubInstance,
         private readonly canvas: HTMLCanvasElement,
@@ -173,22 +244,26 @@ export class LibassRenderer {
             renderer.destroy()
             throw error
         }
+        renderer.clock = driveFromVideoClock(video, instance)
         return renderer
     }
 
     async setTrack(script: string | null) {
         await this.instance.renderer.setTrack(script ?? EMPTY_SCRIPT)
+        this.clock?.redraw()
     }
 
     async addChunks(chunks: readonly AssChunk[]) {
         for (const chunk of chunks) {
             await this.instance.renderer.processChunk(chunk.data, chunk.start, chunk.duration)
         }
+        this.clock?.redraw()
     }
 
     /** Subtitle delay in seconds: positive shows them later. */
     setDelay(delay: number) {
         this.instance.timeOffset = -delay
+        this.clock?.redraw()
     }
 
     setVisible(visible: boolean) {
@@ -196,6 +271,8 @@ export class LibassRenderer {
     }
 
     destroy() {
+        this.clock?.stop()
+        this.clock = null
         void this.instance.destroy().catch(() => undefined)
         this.canvas.remove()
     }
