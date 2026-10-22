@@ -10,10 +10,6 @@
 
 export { MpvPlayerView } from "./MpvPlayerView"
 export { MpvPlayerModule } from "./MpvPlayerModule"
-export { registerSubtitleFeed, getSubtitleFeed } from "./subtitle-feed"
-export type { SubtitleFeed, SubtitleFeedAssChunk, SubtitleFeedCue, SubtitleFeedTrack, SubtitleFeedPlayerEvent } from "./subtitle-feed"
-export { assDialogueCue, parseAssTopStyles } from "./web/subtitles"
-export type { AssTopStyles, SubtitleImage } from "./web/subtitles"
 
 export type {
     MpvVideoSource,
