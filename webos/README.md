@@ -5,7 +5,9 @@ React Native Web and packaged as a webOS web app (`.ipk`). It uses the same scre
 Android TV and tvOS. The remote works the same way, with D-pad focus, Back, OK and the
 media keys; the Magic Remote pointer also works.
 
-**Status: experimental.** It has been exercised in desktop Chromium, not yet on a TV.
+**Status: experimental.** It runs on an LG C3 (webOS 23). Other models and webOS versions
+haven't been tried yet, and some features are still unchecked on a TV (see
+[Not yet verified on a TV](#not-yet-verified-on-a-tv)).
 
 ## Requirements
 
