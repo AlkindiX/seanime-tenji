@@ -23,6 +23,8 @@ import { useServerStatus } from "@/atoms/server.atoms"
 import { torrentSearchAcrossProvidersAtom, torrentSearchExtraProviderIdsAtom } from "@/atoms/torrent-search.atoms"
 import { getDefaultPlaybackSource } from "@/lib/default-playback-source"
 import { streamPlaybackType } from "@/lib/player/direct-stream"
+import { endKeptStream, findKeptStream, probeKeptStream } from "@/lib/player/kept-direct-stream"
+import { useOpenKeptStream } from "@/lib/player/session"
 import {
     activeStreamSessionAtom,
     debridStreamStateAtom,
@@ -36,6 +38,7 @@ import { logger } from "@/lib/utils/logger"
 import { toast } from "@/lib/utils/toast"
 import { useAtom } from "jotai"
 import { useAtomValue, useSetAtom } from "jotai/react"
+import { useFocusEffect } from "expo-router"
 import * as React from "react"
 import { Platform } from "react-native"
 import {
@@ -436,8 +439,54 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
         setUsePreviousBatchPreference(true)
     }, [canUsePreviousBatch])
 
+    const openKeptStream = useOpenKeptStream()
+    const resumingRef = React.useRef(false)
+    /** Bumped when the screen goes away or another stream starts: a pending resume check is then dropped. */
+    const resumeTokenRef = React.useRef(0)
+    const cancelResume = React.useCallback(() => {
+        resumeTokenRef.current++
+        resumingRef.current = false
+    }, [])
+    React.useEffect(() => cancelResume, [cancelResume])
+    useFocusEffect(React.useCallback(() => cancelResume, [cancelResume]))
+
+    /**
+     * webOS: the stream the player left for this episode still runs on the
+     * server, so the player opens on it where it was, with nothing to
+     * download again. If the server no longer serves it, `startFresh` starts
+     * the episode as usual. False when no stream is kept for the episode.
+     */
+    const resumeKeptStream = React.useCallback((episodeNumber: number, startFresh: () => void) => {
+        const kept = findKeptStream(mediaId, episodeNumber)
+        if (!kept) return false
+        if (resumingRef.current) return true
+        resumingRef.current = true
+        const token = ++resumeTokenRef.current
+        void probeKeptStream(kept).then((probe) => {
+            // The user left the screen or started something else meanwhile.
+            if (token !== resumeTokenRef.current) return
+            resumingRef.current = false
+            // The server ended the kept stream meanwhile: start the episode as usual.
+            if (findKeptStream(kept.mediaId, kept.episodeNumber)?.playbackId !== kept.playbackId) {
+                startFresh()
+                return
+            }
+            if (probe === "gone") {
+                log.info("The kept stream ended on the server; starting the episode again", { mediaId, episodeNumber })
+                endKeptStream("forget", kept.playbackId)
+                startFresh()
+                return
+            }
+            openKeptStream(kept)
+        })
+        return true
+    }, [mediaId, openKeptStream])
+
     const startAutoSelectedStream = React.useCallback((episode: Anime_Episode, mode: StreamMode = streamMode) => {
         if (!episode.aniDBEpisode || !mediaId || !ensureLiveConnection()) return
+        // A new stream replaces the one the player left (webOS); end it first.
+        cancelResume()
+        endKeptStream("terminate")
         episodeSelectionLockedRef.current = true
         log.info(`Starting ${mode} stream`, {
             mediaId,
@@ -537,6 +586,8 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
         launchMode?: StreamEpisodeLaunchMode
     }, mode: StreamMode = streamMode) => {
         if (!params.episode.aniDBEpisode || !mediaId || !ensureLiveConnection()) return
+        cancelResume()
+        endKeptStream("terminate")
         episodeSelectionLockedRef.current = true
         log.info(`Starting ${mode} stream`, {
             mediaId,
@@ -753,8 +804,11 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
         }
     }, [batchHistory, guessPreviousBatchFileIndex, streamMode, supportsIndexedDebridHistory, supportsPreviousBatch])
 
+    const handleEpisodePressRef = React.useRef<(episode: Anime_Episode) => void>(() => undefined)
     const handleEpisodePress = React.useCallback((episode: Anime_Episode) => {
-        if (episodeSelectionLockedRef.current) return
+        if (episodeSelectionLockedRef.current || resumingRef.current) return
+        // Played again while the stream the player left still runs: pick it up.
+        if (mode === "stream" && resumeKeptStream(episode.episodeNumber, () => handleEpisodePressRef.current(episode))) return
 
         setSelectedEpisodeNumber(episode.episodeNumber)
         const sMode = streamMode
@@ -809,7 +863,11 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
         openPickerForEpisode(episode, "torrents", sMode)
     },
         [autoSelect, autoSelectFile, batchHistory?.torrent, episodeCollection?.hasMappingError, getPreviousBatchSelection, openPickerForEpisode,
-            startPlayableAutoSelectedStream, startManualStream, streamMode, usePreviousBatch, mode])
+            resumeKeptStream, startPlayableAutoSelectedStream, startManualStream, streamMode, usePreviousBatch, mode])
+
+    React.useEffect(() => {
+        handleEpisodePressRef.current = handleEpisodePress
+    }, [handleEpisodePress])
 
     const startPreviousBatchStream = React.useCallback((episode: Anime_Episode, mode: StreamMode = streamMode) => {
         if (!episode.aniDBEpisode) {
@@ -952,6 +1010,7 @@ export function useTorrentStreamController({ entry, mode = "stream" }: UseTorren
         providerExtensions: providerExtensions ?? [],
         refetchSearch,
         resolution,
+        resumeKeptStream,
         searchMode,
         searchQuery,
         selectedEpisode,

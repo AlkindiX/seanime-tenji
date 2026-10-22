@@ -4,6 +4,7 @@ import { ProfileSubpageHeader } from "@/components/features/profile/profile-menu
 import { Surface } from "@/components/shared/surface"
 import { Button } from "@/components/ui/button"
 import { useServerConnectionState } from "@/lib/offline"
+import { endKeptStream } from "@/lib/player/kept-direct-stream"
 import {
     activeStreamSessionAtom,
     debridStreamStateAtom,
@@ -18,7 +19,7 @@ import {
 import { Ionicons } from "@expo/vector-icons"
 import { useAtom, useAtomValue } from "jotai"
 import * as React from "react"
-import { Alert, ScrollView, Text, View } from "react-native"
+import { Alert, Platform, ScrollView, Text, View } from "react-native"
 import { useSafeAreaInsets } from "react-native-safe-area-context"
 
 export default function ActiveStreamScreen() {
@@ -57,6 +58,8 @@ export default function ActiveStreamScreen() {
         if (!activeStream || isStopping || !isConnected) return
 
         const stop = () => {
+            // webOS: a stream the player left running ends with it.
+            endKeptStream("terminate")
             if (activeStream.streamMode === "debrid") {
                 cancelDebridStream.mutate({
                     options: {
@@ -71,6 +74,12 @@ export default function ActiveStreamScreen() {
             stopTorrentStream.mutate(undefined, {
                 onSuccess: clearLocalStreamState,
             })
+        }
+
+        // React Native Web's Alert shows nothing, so the button stops it directly there.
+        if (Platform.OS === "web") {
+            stop()
+            return
         }
 
         Alert.alert(

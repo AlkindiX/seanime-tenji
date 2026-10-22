@@ -21,7 +21,8 @@ import { describeTVAudioTrack } from "@/lib/webos/tv-audio"
 import type { MpvChapter, MpvExternalSubtitle, MpvSourceAudioTrack } from "expo-mpv-player"
 import React from "react"
 import { createDirectStreamSession, describeStreamCodecs, type DirectStreamSession, directStreamChapters } from "./direct-stream"
-import { streamFailureMessage } from "./direct-stream-format"
+import { streamAudioWarning, streamFailureMessage } from "./direct-stream-format"
+import { endKeptStream, keptDirectStreams } from "./kept-direct-stream"
 import { proxiedUrl } from "./online-proxy"
 import { getWatchHistoryResumePosition } from "./resume-position"
 import type { MobilePlaybackSource, WebPlaybackPlan } from "./types"
@@ -256,27 +257,51 @@ function announce(plan: Omit<WebPlaybackPlan, "onPlaybackError">, audioWarnings:
     }
 }
 
-/** One direct-stream session per source, ended (which stops the server's stream) when the player leaves it. */
+/**
+ * One direct-stream session per source. Leaving the player doesn't end it:
+ * the stream keeps running on the server and the session keeps collecting
+ * subtitle lines, so playing the episode again picks it up where it was
+ * (kept-direct-stream.ts). A finished episode has nothing to come back to.
+ */
 function useDirectStreamSession(source: MobilePlaybackSource | null) {
     const [current, setCurrent] = React.useState<{ id: string; session: DirectStreamSession } | null>(null)
     const latest = React.useRef(source)
     latest.current = source
     const id = source?.directStreamPlaybackId ? source.id : null
+    const otherPlaybackId = source && !source.directStreamPlaybackId ? source.id : null
+
+    // A library file or an online stream ends a kept stream, as another stream would.
+    React.useEffect(() => {
+        if (otherPlaybackId) endKeptStream("terminate")
+    }, [otherPlaybackId])
 
     React.useEffect(() => {
         const source = latest.current
-        if (!id || !source) {
+        const playbackId = source?.directStreamPlaybackId
+        if (!id || !source || !playbackId) {
             setCurrent(null)
             return
         }
-        const session = createDirectStreamSession(source)
-        if (!session) return
-        setCurrent({ id, session })
-        const { riskyAudio } = describeStreamCodecs(source.mkvMetadata)
-        if (riskyAudio.length > 0) {
-            toast.warning(`This TV may not play ${riskyAudio.join(" or ")} audio. If the video doesn't start, pick a release with AAC audio.`, { visibilityTime: 6000 })
+        const kept = keptDirectStreams.current()
+        let session: DirectStreamSession
+        if (kept?.playbackId === playbackId) {
+            session = kept.session
+            session.reattach()
+        } else {
+            const created = createDirectStreamSession(source)
+            if (!created) return
+            session = created
+            const audioWarning = streamAudioWarning(describeStreamCodecs(source.mkvMetadata))
+            if (audioWarning) {
+                toast.warning(audioWarning, { visibilityTime: 6000 })
+            }
         }
-        return () => session.terminate()
+        keptDirectStreams.attach({ playbackId, mediaId: source.mediaId, episodeNumber: source.episodeNumber, source, session })
+        setCurrent({ id, session })
+        return () => {
+            if (session.ended()) endKeptStream("terminate", playbackId)
+            else if (keptDirectStreams.leave(playbackId, session.position())) session.release()
+        }
     }, [id])
 
     return current
