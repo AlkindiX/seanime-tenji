@@ -287,13 +287,18 @@ export function useDeleteAnilistListEntry(id: Nullish<string | number>,
     }
 }
 
-export function useAnilistListAnime(variables: AnilistListAnime_Variables, enabled: boolean) {
+/**
+ * `muteError` skips the error toast, for a list a screen can do without. The
+ * query is shared by key, so the options of whichever screen fetches it apply.
+ */
+export function useAnilistListAnime(variables: AnilistListAnime_Variables, enabled: boolean, options?: { muteError?: boolean }) {
     return useServerQuery<AL_ListAnime, AnilistListAnime_Variables>({
         endpoint: API_ENDPOINTS.ANILIST.AnilistListAnime.endpoint,
         method: API_ENDPOINTS.ANILIST.AnilistListAnime.methods[0],
         queryKey: [API_ENDPOINTS.ANILIST.AnilistListAnime.key, variables],
         data: variables,
         enabled: enabled ?? true,
+        muteError: options?.muteError,
     })
 }
 

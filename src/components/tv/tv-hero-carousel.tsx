@@ -65,7 +65,10 @@ export const TVHeroCarousel = React.memo(function TVHeroCarousel({
     height = tvSize(560),
     loading = false,
 }: Props) {
-    const [index, setIndex] = React.useState(0)
+    // The slide on screen, by key: when the items change (webOS: trending arrives
+    // after continue watching, a refetch reorders them) the hero stays on that
+    // slide, wherever it now is, and starts over at the first only when it is gone.
+    const [slideKey, setSlideKey] = React.useState<string | null>(null)
     const [firstAction, setFirstAction] = React.useState<React.ElementRef<typeof Pressable> | null>(null)
     // Rotation waits while focus is on the hero's buttons, so they don't change under it.
     const [focusInside, setFocusInside] = React.useState(false)
@@ -73,23 +76,26 @@ export const TVHeroCarousel = React.memo(function TVHeroCarousel({
     const textRef = React.useRef<ViewNode>(null)
     const keys = items.map(item => item.key).join(":")
     const count = items.length
+    const index = slideKey === null ? 0 : Math.max(items.findIndex(item => item.key === slideKey), 0)
+    const nextKey = count > 1 ? items[(index + 1) % count].key : null
     const rotating = active && count > 1 && !focusInside
 
+    // Android TV and tvOS start over at the first slide whenever the items change, as before.
     React.useEffect(() => {
-        setIndex(0)
+        if (Platform.OS !== "web") setSlideKey(null)
     }, [keys])
 
     const move = React.useCallback((next: number) => {
         if (count <= 1) return
-        setIndex((next + count) % count)
-    }, [count])
+        setSlideKey(items[(next + count) % count].key)
+    }, [count, items])
 
     // One timer per slide: a manual change starts the wait over.
     React.useEffect(() => {
-        if (!rotating) return
-        const timer = setTimeout(() => setIndex(current => (current + 1) % count), ROTATE_MS)
+        if (!rotating || nextKey === null) return
+        const timer = setTimeout(() => setSlideKey(nextKey), ROTATE_MS)
         return () => clearTimeout(timer)
-    }, [count, index, rotating])
+    }, [index, nextKey, rotating])
 
     React.useEffect(() => {
         if (Platform.OS !== "web") return
@@ -107,7 +113,7 @@ export const TVHeroCarousel = React.memo(function TVHeroCarousel({
         }
     }, [count > 0])
 
-    const item = count > 0 ? items[Math.min(index, count - 1)] : null
+    const item = count > 0 ? items[index] : null
 
     // The next backdrop is decoded before its turn, so the cross-fade doesn't stall on it.
     React.useEffect(() => {

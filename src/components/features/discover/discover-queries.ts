@@ -35,13 +35,13 @@ function getPreviousSeason(): { season: AL_MediaSeason; year: number } {
 // Discover queries
 ///////////////////////////////////////////////////////////////////////////////
 
-export function useDiscoverTrendingAnime(enabled: boolean = true, genres?: string[]) {
+export function useDiscoverTrendingAnime(enabled: boolean = true, genres?: string[], options?: { muteError?: boolean }) {
     return useAnilistListAnime({
         page: 1,
         perPage: 20,
         sort: ["TRENDING_DESC"],
         genres: genres && genres.length > 0 ? genres : undefined,
-    }, enabled)
+    }, enabled, options)
 }
 
 export function getRecentAnime(schedules: AL_ListRecentAnime_Page_AiringSchedules[] | undefined): AL_BaseAnime[] {

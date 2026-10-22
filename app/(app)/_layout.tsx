@@ -4,6 +4,7 @@ import { useDownloadQueueResumeService } from "@/lib/downloads/download-queue-re
 import { useDownloadSnapshotRefreshService, useOfflineSyncService, useServerLocalSyncService } from "@/lib/offline"
 import { tvStackScreenLayout } from "@/components/tv/tv-screen-transition"
 import { usePlayerEventListener } from "@/lib/player"
+import { useWebOSLaunchParams } from "@/lib/webos/use-launch-params"
 import { Stack } from "expo-router"
 import { Platform, View } from "react-native"
 
@@ -20,6 +21,11 @@ function PlayerEventMount() {
     return null
 }
 
+function WebOSLaunchMount() {
+    useWebOSLaunchParams()
+    return null
+}
+
 export default function AppLayout() {
     const serverUrl = useServerUrl()
 
@@ -33,6 +39,7 @@ export default function AppLayout() {
         <ServerDataWrapper>
             {!Platform.isTV && <BackgroundServices />}
             <PlayerEventMount />
+            {Platform.OS === "web" && <WebOSLaunchMount />}
             <Stack screenOptions={{ headerShown: false }} screenLayout={Platform.isTV ? tvStackScreenLayout : undefined}>
                 <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                 <Stack.Screen
