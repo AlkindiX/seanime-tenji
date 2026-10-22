@@ -74,6 +74,58 @@ so give every new focusable an `accessibilityLabel`, especially icon-only ones. 
 with an icon font would otherwise be read as part of the name. The labels have been checked
 in desktop Chromium, not yet with the TV's speech.
 
+## Start screen
+
+Tenji opens on the Anime tab. On webOS it shows what to watch next and what is popular
+before the library lists:
+
+- **The hero** (the large slides at the top) starts with the shows to continue watching,
+  as on Android TV, then shows the anime trending on AniList right now ("#3 trending on
+  AniList"), until it has 8 slides. With nothing to continue, trending fills it; with 8
+  or more shows to continue, it is all continue watching. Trending shows already in
+  continue watching or in *Currently watching* are left out, and only those with a banner
+  image become slides. When trending arrives after the slides to continue (or a refresh
+  reorders them), the hero stays on the slide it is showing.
+- **A "Trending now" row** sits right after *Currently watching* (or first, without
+  that row). Its cards open the show, as on Discover.
+- With an empty library, the trending slides and row are shown instead of "Your anime
+  library is empty".
+
+Trending is the same AniList query as Discover's first row (fetched through the server),
+so the two screens share one result. If AniList fails, the start screen just leaves the
+trending slides and row out, without an error message on every launch. Android TV and
+tvOS keep their start screen as it was.
+
+**Opening Tenji to a show (launch parameters).** Tenji reads the parameters it is
+launched with, at start and when it is launched again while running (LG's `webOSLaunch` /
+`webOSRelaunch` events, and `launchParams` for the first launch). Once the server has
+answered (not while Tenji is still connecting) it opens what they ask for:
+
+| Parameters | Opens |
+| --- | --- |
+| `{"mediaId": 21}` | the show with that AniList id |
+| `{"screen": "home"}` | the start screen |
+| `{"screen": "discover"}` | Discover |
+
+```bash
+ares-launch --device tv app.seanime.tenji -p '{"mediaId":21}'
+```
+
+Anything that can launch a webOS app with parameters (the Application Manager's `launch`
+call, home automation hubs) can do the same. They never start playback, and while the
+player is open they are ignored so it isn't interrupted. Launching from the app's tile
+(no parameters) leaves Tenji where it was. A request waits for the server at most 45
+seconds, and is dropped if the server address changes in the meantime, so a show doesn't
+open long after it was asked for. `"screen"` closes a show or list open above the tabs,
+or switches tabs when none is.
+
+**Why not the TV's home screen.** According to LG's developer documentation and LG staff
+on its developer forum, the cards LG shows above an app's tile on the home screen (the
+*Preview Area*), LG's home search and content recommendations are only for LG's contracted
+content partners, and toasts and alerts only for system apps. Tenji doesn't try them, so
+trending and continue-watching shows are on its own start screen instead. This has not been
+tested on the C3 (see Not yet verified).
+
 ## Playback
 
 The built-in player is the TV's HTML5 video engine, not libmpv.
@@ -139,6 +191,27 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   - Not done: decoding FLAC in the app. The TV's video element hands its audio to the
     platform, and the alternatives (MSE with FLAC in MP4, WebCodecs) need a demuxer in the
     app and are unverified on LG TVs.
+- **Controls** are laid out as on YouTube on TV: title and episode at the top left, the
+  seek bar across the bottom with the elapsed and total time under it, and one centred
+  row of round buttons under that, play/pause in the middle and largest (rewind and
+  forward by the seek step, next episode, audio & subtitles, settings and episodes
+  around it). Play/pause has focus when the controls come up; the focused button turns
+  white and shows its name under it. The controls fade in.
+- **Seeking (scrubbing).** Left/right don't seek the video on every press: they move a
+  target on the seek bar, shown with its time and how far it is from where you were
+  (`+30s`), and Tenji seeks once, about 0.7 s after the last press, or at once on OK.
+  Each seek of a torrent stream makes the server fetch from a new spot and restart its
+  subtitle reading, so ten quick presses are one seek. Holding left/right moves the
+  target faster the longer it is held (a full episode in about eight seconds at top
+  speed). Back while a target is showing drops it and does nothing else. With the
+  controls hidden, left/right bring them up on the seek bar and start scrubbing right
+  away; the rewind/forward buttons and ⏩/⏪ move the target too. Until the seek lands,
+  the bar stays on the target. Without a known duration, the presses add up to one
+  relative seek.
+- **Torrent stream stats.** With the controls up, a pill at the top right shows the
+  download speed, how much of the file is downloaded, the seeders and how far ahead of
+  playback the video is buffered. It is shown only for torrent streams, once the
+  server has sent its first stats.
 - **Playback stats** (Info key) show the mode (`html5 · direct play`, or
   `html5+hls.js · transcode`), the file's codecs, why it is transcoded, and the TV model.
 - **Chapters** of library files come from the server, so the seek bar shows them (and the
@@ -149,6 +222,41 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
   subtitle search) and speed. It comes back paused with the controls up, also when the
   episode was still loading as the app was hidden; resuming on its own is deliberately
   not done.
+- **Leaving the player.** Back leaves at once, without asking: playback pauses, the player
+  fades out (160 ms, opacity and scale with the Web Animations API) and the page underneath
+  eases in. Back still closes an open panel or dialog first, then the controls. The controls'
+  exit button leaves the same way; the remote's Stop key leaves and also ends the stream. The
+  position goes to the server's watch history before the player closes.
+- **Torrent and debrid streams keep running** after you leave the player, in case Back was
+  pressed by accident. The server goes on downloading the episode's file (it marks the whole
+  file for download) and Tenji keeps the subtitle lines it sends meanwhile. Playing that
+  episode again (its card, *Play*, or *Resume* on the card the Torrents tab shows, which has
+  focus when you come back from the player) reopens the player at once where you left it,
+  without asking the server for a new stream, so nothing is downloaded again. First a HEAD
+  request checks that the server still serves that stream; if it doesn't (it restarted,
+  another device started a stream, the torrent was stopped elsewhere), the episode starts
+  afresh as usual.
+  - The kept stream ends when another episode or video starts (torrent, debrid, library file
+    or online stream), with *Stop* on that card, when the episode played to the end or the
+    player failed, after 30 minutes nobody watched it, when the app is hidden (Home, another
+    app, standby: a suspended TV runs no timers) and when it closes (sent as the page
+    unloads, so not guaranteed). Stopping the stream on the server ends it too, and so does
+    connecting to another server. Without a websocket at that moment (e.g. right after
+    standby), the stream is stopped over HTTP instead (`/api/v1/torrentstream/stop` or
+    `/api/v1/debrid/stream/cancel`), but only after a HEAD request shows the server still
+    serves it: that request stops whatever the server streams, and a TV that slept through
+    another device starting a stream would otherwise stop that one.
+  - Leaving the player gives up the server's player slot while the stream runs on. The
+    server follows one player at a time and ignores every other device's player while that
+    one stays connected, so a phone or browser playing meanwhile got no subtitles and no
+    progress. Tenji sends `video-terminated` for a playback ID that isn't the stream's:
+    VideoCore clears its player whatever the ID, while the direct stream and mediacore drop
+    a termination of another playback, so the stream keeps running (Seanime 3.10.4; checked
+    with two clients on a throwaway server).
+  - Picking it up again tells the server the player is back (`video-loaded`) and reports a
+    seek to where it starts: the server sends each subtitle line only once and ignores a
+    second `video-loaded-metadata` after a seek, so the seek makes it read the subtitles again
+    from there.
 - **Resuming** ("continue watching") hands the start position to the TV's media pipeline
   with LG's `mediaOption` parameter, so it doesn't buffer from the start of the file first.
   If the TV rejects it, or the file hasn't loaded after 8 seconds, Tenji loads the file the
@@ -165,6 +273,13 @@ The built-in player is the TV's HTML5 video engine, not libmpv.
     on a canvas over the video. *Subtitle styling* under Audio & subtitles switches to
     plain text lines instead (what's left of the dialogue, without signs), which is also
     used when libass can't start on a TV.
+  - JASSUB draws when the browser reports a presented video frame
+    (`requestVideoFrameCallback`). webOS shows the video on its own hardware plane and
+    never reports one (seen on an LG C3, WebAppManager with Chrome 132), so libass got
+    every line and drew none, on a canvas left at 300x150. While no frames are reported,
+    the video's clock drives JASSUB instead (`manualRender`): about 30 times a second
+    while it plays, and once after a seek, a pause, a track change or new lines. libass
+    skips frames whose picture didn't change.
   - **SRT and WebVTT** are drawn as text in the subtitle size you pick.
   - **PGS** (image subtitles of Blu-ray rips) in torrent and debrid streams are shown as
     the server decodes them, placed where the disc puts them.
@@ -279,17 +394,18 @@ The arrow keys, OK and Back work as on Android TV. LG remotes also have these ke
 | Yellow | Skip the intro or outro when the button is offered, otherwise show the controls | |
 | Blue | Settings | |
 | Info | Show or hide playback stats | |
-| Stop | Ask to leave the player | |
+| Stop | Leave the player and end the stream (Back keeps it running; see Playback) | |
 | CH+ / CH- | Next / previous episode (asks first when much of the episode is left) | Page up / down through a list or grid |
 | 0 to 9 | Jump to 0 %, 10 % … 90 % of the episode | Type into a text field |
-| Play, Pause, ⏩, ⏪ | Play, pause, seek | |
+| Play, Pause, ⏩, ⏪ | Play, pause, move the seek target (see Seeking) | |
 
 Android TV remotes that have these keys get the same player shortcuts.
 
 **Magic Remote pointer.** Moving the pointer shows the player controls, clicking the
-video pauses or plays, and clicking the timeline seeks to that spot. Focus follows the
-pointer. When the pointer hides or a system overlay takes it, the D-pad highlight comes
-back.
+video pauses or plays, and clicking the timeline seeks to that spot. Pressing on the
+timeline and dragging shows the target as you move; letting go seeks there, once.
+Focus follows the pointer. When the pointer hides or a system overlay takes it, the
+D-pad highlight comes back.
 
 **Dragging.** Press the wheel (OK) on a row and move the pointer to drag the row sideways,
 or on the page to drag it up and down; let go while moving and it glides on a little. A
@@ -323,6 +439,9 @@ are released, so a long seek doesn't continue when you come back.
 - **OK in pointer mode.** If a TV sends both a keydown 13 and a click for one OK press, a
   button would fire twice. This needs checking on a TV before adding any de-duplication.
   Pausing from the wheel already counts only one of the two (within 400 ms).
+- How scrubbing feels with a real remote: LG's key repeat delay and rate decide when a
+  held arrow starts moving the target, and dragging the timeline with the Magic Remote.
+  Checked with unit tests and the typecheck only.
 - Pausing with the wheel, and how dragging feels with a real Magic Remote. Dragging was
   checked in desktop Chromium with a mouse.
 - How far one wheel notch scrolls (`deltaY` per notch) on a real Magic Remote.
@@ -337,12 +456,18 @@ are released, so a long seek doesn't continue when you come back.
   takes the switch before playback starts), and that the client's auto-select picks what
   the server would. These were checked with unit tests against the server's code, not
   on a TV or a server.
-- libass on a TV: its speed with heavy typesetting, and loading its worker and wasm from
-  `file://` (they are read with XMLHttpRequest and handed over as blob URLs, as a worker
-  can't `fetch()` files). Checked in desktop Chromium over http. If it fails, subtitles
-  fall back to plain text. JASSUB's worker needs Chromium 80 for `type: "module"`; the
+- libass on a TV: draws ASS subtitles and signs on an LG C3 (webOS with Chrome 132,
+  installed from `file://`) since the video's clock drives it. Still to see: its speed with
+  heavy typesetting. If it fails, subtitles fall back to plain text. JASSUB's worker needs Chromium 80 for `type: "module"`; the
   build makes it a classic script, so webOS 6 may run it too.
 - PGS placement was checked with a test image, not a real Blu-ray track.
+- Leaving the player and resuming a kept stream: checked by typecheck, unit tests of the
+  bookkeeping, the Seanime 3.10.4 server source, and against a real server in desktop
+  Chromium (leaving keeps the stream, resuming brings the subtitles back, another device's
+  player is heard after Back). Still to see on a TV: whether the exit fade also fades the
+  video (webOS may draw video on its own plane, in which case the paused frame stays until
+  the player closes), how long resuming takes, and whether the stream ends when the app is
+  closed.
 - The relay service on a TV (see Live connection). The relay was tested against a local `ws`
   server, the app's side through a stand-in `PalmServiceBridge`, and the built bundle with a
   stand-in `webos-service`, all in Node 22. Still to check on a TV: that Developer Mode and
@@ -352,6 +477,10 @@ are released, so a long seek doesn't continue when you come back.
   another machine; and that large server messages pass over the bus. LG documents no size
   limit for Luna messages. LG's ACG guide doesn't say whether webOS 26 checks an app's
   calls to its own service; a refused call counts as a missing service.
+- Launch parameters (see Start screen): that the TV fills `launchParams` and the events'
+  `detail` as LG documents, on the first launch and on a relaunch.
+- Whether a sideloaded app really can't show a toast or put cards on the home screen of
+  the C3. That is what LG's docs and staff say (see Start screen); it was not tried.
 
 ## Debug logs
 
